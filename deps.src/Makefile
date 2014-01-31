@@ -34,7 +34,7 @@ sdl2:
 	cd $(SDL2DIR)/mybuild; ../configure --prefix=$(GADEPS) --with-pic
 	make -C $(SDL2DIR)/mybuild -j5
 	make -C $(SDL2DIR)/mybuild install
-	rm -rf $(SDL2DIR)
+	#rm -rf $(SDL2DIR)
 
 sdl2_ttf:
 	$(TBZUNPACK) $(SDL2_TTF)
@@ -42,21 +42,21 @@ sdl2_ttf:
 	cd $(SDL2_TTFDIR)/mybuild; ../configure --prefix=$(GADEPS) --with-pic
 	make -C $(SDL2_TTFDIR)/mybuild -j5
 	make -C $(SDL2_TTFDIR)/mybuild install
-	rm -rf $(SDL2_TTFDIR)
+	#rm -rf $(SDL2_TTFDIR)
 
 yasm:
 	$(TGZUNPACK) $(YASM)
 	cd $(YASMDIR); ./configure --prefix=$(GADEPS)
 	make -C $(YASMDIR) -j5
 	make -C $(YASMDIR) install
-	rm -rf $(YASMDIR)
+	#rm -rf $(YASMDIR)
 
 lame:
 	$(TGZUNPACK) $(LAME)
 	cd $(LAMEDIR); ./configure --prefix=$(GADEPS) --with-pic
 	make -C $(LAMEDIR) -j5
 	make -C $(LAMEDIR) install
-	rm -rf $(LAMEDIR)
+	#rm -rf $(LAMEDIR)
 
 opus:
 	$(TGZUNPACK) $(OPUS)
@@ -64,49 +64,51 @@ opus:
 	cd $(OPUSDIR); ./configure --prefix=$(GADEPS) --with-pic
 	make -C $(OPUSDIR) -j5
 	make -C $(OPUSDIR) install
-	rm -rf $(OPUSDIR)
+	#rm -rf $(OPUSDIR)
 
 ogg:
 	$(TGZUNPACK) $(OGG)
 	cd $(OGGDIR); ./configure --prefix=$(GADEPS) --with-pic
 	make -C $(OGGDIR) -j5
 	make -C $(OGGDIR) install
-	rm -rf $(OGGDIR)
+	#rm -rf $(OGGDIR)
 
 vorbis:
 	$(TGZUNPACK) $(VORBIS)
+	# Fix missing reference to ARM6 for Raspberry Pi compilation
+	sed -i.bak 's/armv\[345\]/armv\[3456\]/g' $(VORBISDIR)/config.sub
 	cd $(VORBISDIR); ./configure --prefix=$(GADEPS) --build=$(MACHINE) --with-pic
 	make -C $(VORBISDIR) -j5
 	make -C $(VORBISDIR) install
-	rm -rf $(VORBISDIR)
+	#rm -rf $(VORBISDIR)
 
 theora:
 	$(TBZUNPACK) $(THEORA)
 	cd $(THEORADIR); ./configure --prefix=$(GADEPS) --with-pic
 	make -C $(THEORADIR) -j5
 	make -C $(THEORADIR) install
-	rm -rf $(THEORADIR)
+	#rm -rf $(THEORADIR)
 
 vpx:
 	$(TBZUNPACK) $(VPX)
 	cd $(VPXDIR); ./configure --prefix=$(GADEPS) $(VPX_EXTRA_CONFIG) --enable-pic
 	make -C $(VPXDIR) -j5
 	make -C $(VPXDIR) install
-	rm -rf $(VPXDIR)
+	#rm -rf $(VPXDIR)
 
 x264:
 	$(TBZUNPACK) $(X264)
 	cd $(X264DIR); ./configure --prefix=$(GADEPS) --enable-shared --enable-pic
 	make -C $(X264DIR) -j5
 	make -C $(X264DIR) install
-	rm -rf $(X264DIR)
+	#rm -rf $(X264DIR)
 
 xvid:
 	$(TBZUNPACK) $(XVID)
 	cd $(XVIDDIR)/build/generic; ./configure --prefix=$(GADEPS)
 	make -C $(XVIDDIR)/build/generic -j5
 	make -C $(XVIDDIR)/build/generic install
-	rm -rf $(XVIDDIR)
+	#rm -rf $(XVIDDIR)
 
 ffmpeg:
 	$(TBZUNPACK) $(FFMPEG)
@@ -122,7 +124,7 @@ ffmpeg:
 		--extra-ldflags=-L$(GADEPS)/lib
 	make -C $(FFMPEGDIR) -j5
 	make -C $(FFMPEGDIR) install
-	rm -rf $(FFMPEGDIR)
+	#rm -rf $(FFMPEGDIR)
 
 live555:
 	$(TGZUNPACK) $(LIVE555)
@@ -139,5 +141,5 @@ live555:
 	-mkdir -p $(GADEPS)/include/live555
 	find $(LIVE555DIR) -name '*.hh' -exec cp -f {} $(GADEPS)/include/live555 \;
 	cp -f $(LIVE555DIR)/groupsock/include/NetCommon.h $(GADEPS)/include/live555
-	rm -rf $(LIVE555DIR)
+	#rm -rf $(LIVE555DIR)
 

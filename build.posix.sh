@@ -12,12 +12,12 @@ export EXTRACFLAGS="-I/usr/local/include" # Fix needed to compile on OS X Maveri
 cd $GAPATH
 
 # Build the dependencies
-if [ ! -d "deps.posix" ]; then
+#if [ ! -d "deps.posix" ]; then
 	echo "*** Building dependencies ***"
 	cd deps.src/
 	make || exit 1;
 	cd ../
-fi
+#fi
 
 # Build GamingAnywhere
 echo "*** Building GamingAnywhere ***"
