@@ -25,17 +25,40 @@
 typedef void * HMODULE;
 #endif
 
+enum ga_module_types {
+	GA_MODULE_TYPE_NULL = 0,
+	GA_MODULE_TYPE_CONTROL,
+	GA_MODULE_TYPE_ASOURCE,
+	GA_MODULE_TYPE_VSOURCE,
+	GA_MODULE_TYPE_FILTER,
+	GA_MODULE_TYPE_AENCODER,
+	GA_MODULE_TYPE_VENCODER,
+	GA_MODULE_TYPE_ADECODER,
+	GA_MODULE_TYPE_VDECODER
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 //////////////////////////////////////////////
-struct ga_module {
+typedef struct ga_module_s {
 	HMODULE	handle;
+	int type;
+	char *name;
+	char *mimetype;
 	int (*init)(void *arg);
-	void* (*threadproc)(void *arg);
-	void (*deinit)(void *arg);
-	int (*notify)(void *msg, int msglen);
-};
+	int (*start)(void *arg);
+	//void * (*threadproc)(void *arg);
+	int (*stop)(void *arg);
+	int (*deinit)(void *arg);
+	int (*notify)(void *arg);
+	void * (*raw)(void *arg, int *size);
+	void * (*option1)(void *arg, int *size);
+	void * (*option2)(void *arg, int *size);
+	void * (*option3)(void *arg, int *size);
+	void * (*option4)(void *arg, int *size);
+	void * privdata;
+}	ga_module_t;
 //////////////////////////////////////////////
 #ifdef __cplusplus
 }
@@ -48,12 +71,17 @@ struct ga_module {
 #define	MODULE_EXPORT
 #endif
 
-EXPORT struct ga_module * ga_load_module(const char *modname, const char *prefix);
+EXPORT ga_module_t * ga_load_module(const char *modname, const char *prefix);
 EXPORT void * ga_module_loadfunc(HMODULE h, const char *prefix, const char *funcname);
-EXPORT void ga_unload_module(struct ga_module *m);
-EXPORT int ga_init_single_module(const char *name, struct ga_module *m, void *arg);
-EXPORT void ga_init_single_module_or_quit(const char *name, struct ga_module *m, void *arg);
+EXPORT void ga_unload_module(ga_module_t *m);
+EXPORT int ga_init_single_module(const char *name, ga_module_t *m, void *arg);
+EXPORT void ga_init_single_module_or_quit(const char *name, ga_module_t *m, void *arg);
 EXPORT int ga_run_single_module(const char *name, void * (*threadproc)(void*), void *arg);
 EXPORT void ga_run_single_module_or_quit(const char *name, void * (*threadproc)(void*), void *arg);
+
+#ifdef GA_MODULE
+// a module must have exported the module_load function
+MODULE MODULE_EXPORT ga_module_t * module_load();
+#endif
 
 #endif /* __GA_MODULE__ */

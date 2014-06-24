@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Chun-Ying Huang
+ * Copyright (c) 2013-2014 Chun-Ying Huang
  *
  * This file is part of GamingAnywhere (GA).
  *
@@ -372,7 +372,7 @@ per_client_init(RTSPContext *ctx) {
 		if((ctx->sdp_vencoder[i] = ga_avcodec_vencoder_init(
 			ctx->sdp_vstream[i]->codec,
 			rtspconf->video_encoder_codec,
-			video_source_maxwidth(i), video_source_maxheight(i),
+			video_source_out_width(i), video_source_out_height(i),
 			rtspconf->video_fps,
 			rtspconf->vso)) == NULL) {
 			//
@@ -615,9 +615,9 @@ rtp_new_av_stream(RTSPContext *ctx, struct sockaddr_in *sin, int streamid, enum 
 	AVCodecContext *encoder = NULL;
 	uint8_t *dummybuf = NULL;
 	//
-	if(streamid > IMAGE_SOURCE_CHANNEL_MAX) {
+	if(streamid > VIDEO_SOURCE_CHANNEL_MAX) {
 		ga_error("invalid stream index (%d > %d)\n",
-			streamid, IMAGE_SOURCE_CHANNEL_MAX);
+			streamid, VIDEO_SOURCE_CHANNEL_MAX);
 		return -1;
 	}
 	if(codecid != rtspconf->video_encoder_codec->id
@@ -690,13 +690,13 @@ rtp_new_av_stream(RTSPContext *ctx, struct sockaddr_in *sin, int streamid, enum 
 		ga_error("Cannot create new stream (%d)\n", codecid);
 		return -1;
 	}
-//#ifndef SHARE_ENCODER
+	//
 	if(codecid == rtspconf->video_encoder_codec->id) {
 		encoder = ga_avcodec_vencoder_init(
 				stream->codec,
 				rtspconf->video_encoder_codec,
-				video_source_maxwidth(streamid),
-				video_source_maxheight(streamid),
+				video_source_out_width(streamid),
+				video_source_out_height(streamid),
 				rtspconf->video_fps,
 				rtspconf->vso);
 	} else if(codecid == rtspconf->audio_encoder_codec->id) {
@@ -713,7 +713,6 @@ rtp_new_av_stream(RTSPContext *ctx, struct sockaddr_in *sin, int streamid, enum 
 		ga_error("Cannot init encoder\n");
 		return -1;
 	}
-//#endif	/* SHARE_ENCODER */
 	//
 	ctx->encoder[streamid] = encoder;
 	ctx->stream[streamid] = stream;
@@ -747,14 +746,14 @@ rtsp_cmd_setup(RTSPContext *ctx, const char *url, RTSPMessageHeader *h) {
 	socklen_t destaddrlen, myaddrlen;
 #endif
 	char path[4096];
-	char channelname[IMAGE_SOURCE_CHANNEL_MAX+1][RTSP_STREAM_FORMAT_MAXLEN];
+	char channelname[VIDEO_SOURCE_CHANNEL_MAX+1][RTSP_STREAM_FORMAT_MAXLEN];
 	int baselen = strlen(rtspconf->object);
 	int streamid;
 	int rtp_port, rtcp_port;
 	enum RTSPStatusCode errcode;
 	//
 	av_url_split(NULL, 0, NULL, 0, NULL, 0, NULL, path, sizeof(path), url);
-	for(i = 0; i < IMAGE_SOURCE_CHANNEL_MAX+1; i++) {
+	for(i = 0; i < VIDEO_SOURCE_CHANNEL_MAX+1; i++) {
 		snprintf(channelname[i], RTSP_STREAM_FORMAT_MAXLEN, RTSP_STREAM_FORMAT, i);
 	}
 	//
@@ -763,13 +762,13 @@ rtsp_cmd_setup(RTSPContext *ctx, const char *url, RTSPMessageHeader *h) {
 		rtsp_reply_error(ctx, RTSP_STATUS_AGGREGATE);
 		return;
 	}
-	for(i = 0; i < IMAGE_SOURCE_CHANNEL_MAX+1; i++) {
+	for(i = 0; i < VIDEO_SOURCE_CHANNEL_MAX+1; i++) {
 		if(strcmp(path+baselen+1, channelname[i]) == 0) {
 			streamid = i;
 			break;
 		}
 	}
-	if(i == IMAGE_SOURCE_CHANNEL_MAX+1) {
+	if(i == VIDEO_SOURCE_CHANNEL_MAX+1) {
 		// not found
 		ga_error("invalid service (path=%s)\n", path);
 		rtsp_reply_error(ctx, RTSP_STATUS_SERVICE);
@@ -904,27 +903,12 @@ rtsp_cmd_play(RTSPContext *ctx, const char *url, RTSPMessageHeader *h) {
 		rtsp_reply_error(ctx, RTSP_STATUS_STATE);
 		return;
 	}
-	// create threads
-#ifndef SHARE_ENCODER
-	if(pthread_create(&ctx->vthread, NULL, vencoder_thread, ctx) != 0) {
-		ga_error("cannot create video thread\n");
-		rtsp_reply_error(ctx, RTSP_STATUS_INTERNAL);
-		return;
-	}
-#ifdef ENABLE_AUDIO
-	if(pthread_create(&ctx->athread, NULL, aencoder_thread, ctx) != 0) {
-		ga_error("cannot create audio thread\n");
-		rtsp_reply_error(ctx, RTSP_STATUS_INTERNAL);
-		return;
-	}
-#endif	/* ENABLE_AUDIO */
-#else
+	// 2014-05-20: support only shared-encoder model
 	if(encoder_register_client(ctx) < 0) {
 		ga_error("cannot register encoder client.\n");
 		rtsp_reply_error(ctx, RTSP_STATUS_INTERNAL);
 		return;
 	}
-#endif	/* SHARE_ENCODER */
 	//
 	ctx->state = SERVER_STATE_PLAYING;
 	rtsp_reply_header(ctx, RTSP_STATUS_OK);
@@ -1070,6 +1054,7 @@ rtspserver(void *arg) {
 	//int iwidth = video_source_maxwidth(0);
 	//int iheight = video_source_maxheight(0);
 	//
+	encoder_config_rtspserver(RTSPSERVER_TYPE_FFMPEG);
 	rtspconf = rtspconf_global();
 	sinlen = sizeof(sin);
 	getpeername(s, (struct sockaddr*) &sin, &sinlen);
@@ -1252,15 +1237,8 @@ quit:
 	ctx.state = SERVER_STATE_TEARDOWN;
 	//
 	close(ctx.fd);
-#ifdef	SHARE_ENCODER
+	// 2014-05-20: support only share-encoder model
 	encoder_unregister_client(&ctx);
-#else
-	ga_error("connection closed, checking for worker threads...\n");
-	pthread_join(ctx.vthread, (void**) &thread_ret);
-#ifdef	ENABLE_AUDIO
-	pthread_join(ctx.athread, (void**) &thread_ret);
-#endif	/* ENABLE_AUDIO */
-#endif	/* SHARE_ENCODER */
 	//
 	per_client_deinit(&ctx);
 	//ga_error("RTSP client thread terminated (%d/%d clients left).\n",

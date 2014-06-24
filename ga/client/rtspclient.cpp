@@ -45,7 +45,14 @@ using namespace std;
 #define	AVCODEC_MAX_AUDIO_FRAME_SIZE	192000 // 1 second of 48khz 32bit audio
 #endif
 
+#define RCVBUF_SIZE		262144
+
 #define	COUNT_FRAME_RATE	600	// every N frames
+
+//#define SAVEFILE        "save.raw"
+#ifdef SAVEFILE
+static FILE *fout = NULL;
+#endif
 
 struct RTSPConf *rtspconf;
 int image_rendered = 0;
@@ -61,10 +68,10 @@ static int video_framing = 0;
 static int audio_framing = 0;
 
 #ifdef COUNT_FRAME_RATE
-static int cf_frame[IMAGE_SOURCE_CHANNEL_MAX];
-static struct timeval cf_tv0[IMAGE_SOURCE_CHANNEL_MAX];
-static struct timeval cf_tv1[IMAGE_SOURCE_CHANNEL_MAX];
-static long long cf_interval[IMAGE_SOURCE_CHANNEL_MAX];
+static int cf_frame[VIDEO_SOURCE_CHANNEL_MAX];
+static struct timeval cf_tv0[VIDEO_SOURCE_CHANNEL_MAX];
+static struct timeval cf_tv1[VIDEO_SOURCE_CHANNEL_MAX];
+static long long cf_interval[VIDEO_SOURCE_CHANNEL_MAX];
 #endif
 
 static unsigned rtspClientCount = 0; // Counts how many streams (i.e., "RTSPClient"s) are currently in use.
@@ -94,9 +101,9 @@ struct PacketQueue {
 };
 
 static RTSPThreadParam *rtspParam = NULL;
-static AVCodecContext *vdecoder[IMAGE_SOURCE_CHANNEL_MAX];
+static AVCodecContext *vdecoder[VIDEO_SOURCE_CHANNEL_MAX];
 static map<unsigned short,int> port2channel;
-static AVFrame *vframe[IMAGE_SOURCE_CHANNEL_MAX];
+static AVFrame *vframe[VIDEO_SOURCE_CHANNEL_MAX];
 static AVCodecContext *adecoder = NULL;
 static AVFrame *aframe = NULL;
 
@@ -195,6 +202,69 @@ rtsperror(const char *fmt, ...) {
 	return;
 }
 
+static unsigned char *
+decode_sprop(AVCodecContext *ctx, const char *sprop) {
+	unsigned char startcode[] = {0, 0, 0, 1};
+	int sizemax = ctx->extradata_size + strlen(sprop) * 3;
+	unsigned char *extra = (unsigned char*) malloc(sizemax);
+	unsigned char *dest = extra;
+	int extrasize = 1;
+	int spropsize = strlen(sprop);
+	char *mysprop = strdup(sprop);
+	unsigned char *tmpbuf = (unsigned char *) strdup(sprop);
+	char *s0 = mysprop, *s1;
+	// already have extradata?
+	if(ctx->extradata) {
+		bcopy(ctx->extradata, extra, ctx->extradata_size);
+		extrasize = ctx->extradata_size;
+		dest += extrasize;
+	}
+	// start converting
+	while(*s0) {
+		int blen, more = 0;
+		for(s1 = s0; *s1; s1++) {
+			if(*s1 == ',' || *s1 == '\0')
+				break;
+		}
+		if(*s1 == ',')
+			more = 1;
+		*s1 = '\0';
+		if((blen = av_base64_decode(tmpbuf, s0, spropsize)) > 0) {
+			int offset = 0;
+			// no start code?
+			if(memcmp(startcode, tmpbuf, sizeof(startcode)) != 0) {
+				bcopy(startcode, dest, sizeof(startcode));
+				offset += sizeof(startcode);
+			}
+			bcopy(tmpbuf, dest + offset, blen);
+			dest += offset + blen;
+			extrasize += offset + blen;
+		}
+		s0 = s1;
+		if(more) {
+			s0++;
+		}
+	}
+	// release
+	free(mysprop);
+	free(tmpbuf);
+	// show decoded sprop
+	if(extrasize > 0) {
+		if(ctx->extradata)
+			free(ctx->extradata);
+		ctx->extradata = extra;
+		ctx->extradata_size = extrasize;
+#ifdef SAVEFILE
+		if(fout != NULL) {
+			fwrite(extra, sizeof(char), extrasize, fout);
+		}
+#endif
+		return ctx->extradata;
+	}
+	free(extra);
+	return NULL;
+}
+
 int
 init_vdecoder(int channel, const char *sprop) {
 	AVCodec *codec = NULL; //rtspconf->video_decoder_codec;
@@ -202,7 +272,7 @@ init_vdecoder(int channel, const char *sprop) {
 	AVFrame *frame;
 	const char **names = NULL;
 	//
-	if(channel > IMAGE_SOURCE_CHANNEL_MAX) {
+	if(channel > VIDEO_SOURCE_CHANNEL_MAX) {
 		rtsperror("video decoder(%d): too many decoders.\n", channel);
 		return -1;
 	}
@@ -236,15 +306,12 @@ init_vdecoder(int channel, const char *sprop) {
 		ctx->flags |= CODEC_FLAG_TRUNCATED;
 	}
 	if(sprop != NULL) {
-		unsigned char *extra = (unsigned char*) strdup(sprop);
-		int extrasize = strlen(sprop);
-		extrasize = av_base64_decode(extra, sprop, extrasize);
-		if(extrasize > 0) {
-			ctx->extradata = extra;
-			ctx->extradata_size = extrasize;
-			rtsperror("video decoder(%d): sprop configured with '%s', decoded-size=%d\n", channel, sprop, extrasize);
+		if(decode_sprop(ctx, sprop) != NULL) {
+			int extrasize = ctx->extradata_size;
+			rtsperror("video decoder(%d): sprop configured with '%s', decoded-size=%d\n",
+				channel, sprop, extrasize);
 			fprintf(stderr, "SPROP = [");
-			for(unsigned char *ptr = extra; extrasize > 0; extrasize--) {
+			for(unsigned char *ptr = ctx->extradata; extrasize > 0; extrasize--) {
 				fprintf(stderr, " %02x", *ptr++);
 			}
 			fprintf(stderr, " ]\n");
@@ -331,8 +398,13 @@ play_video_priv(int ch/*channel*/, unsigned char *buffer, int bufsize, struct ti
 #ifndef ANDROID
 	union SDL_Event evt;
 #endif
-	struct pooldata *data = NULL;
+	pooldata_t *data = NULL;
 	AVPicture *dstframe = NULL;
+#ifdef SAVEFILE
+	if(fout != NULL) {
+		fwrite(buffer, sizeof(char), bufsize, fout);
+	}
+#endif
 	//
 	av_init_packet(&avpkt);
 	avpkt.size = bufsize;
@@ -424,7 +496,7 @@ struct decoder_buffer {
 
 static void
 play_video(int channel, unsigned char *buffer, int bufsize, struct timeval pts, bool marker) {
-	static struct decoder_buffer db[IMAGE_SOURCE_CHANNEL_MAX];
+	static struct decoder_buffer db[VIDEO_SOURCE_CHANNEL_MAX];
 	struct decoder_buffer *pdb = &db[channel];
 	// buffer initialization
 	if(pdb->privbuf == NULL) {
@@ -899,7 +971,11 @@ setupNextSubsession(RTSPClient* rtspClient) {
 	UsageEnvironment& env = rtspClient->envir(); // alias
 	StreamClientState& scs = ((ourRTSPClient*)rtspClient)->scs; // alias
 	bool rtpOverTCP = false;
-
+#ifdef SAVEFILE
+	if(fout == NULL) {
+		fout = fopen(SAVEFILE, "wb");
+	}
+#endif
 	if(rtspconf->proto == IPPROTO_TCP) {
 		rtpOverTCP = true;
 	}
@@ -919,6 +995,10 @@ setupNextSubsession(RTSPClient* rtspClient) {
 #ifdef ANDROID
 					if(rtspconf->builtin_video_decoder != 0) {
 						video_codec_id = ga_lookup_codec_id(video_codec_name);
+						// TODO: retrieve SPS/PPS from sprop-parameter-sets
+						if(video_codec_id == AV_CODEC_ID_H264) {
+							android_config_h264_sprop(rtspParam, scs.subsession->fmtp_spropparametersets());
+						}
 					} else {
 					////// Work with ffmpeg
 #endif
@@ -979,6 +1059,47 @@ setupNextSubsession(RTSPClient* rtspClient) {
 	// We've finished setting up all of the subsessions.  Now, send a RTSP "PLAY" command to start the streaming:
 	scs.duration = scs.session->playEndTime() - scs.session->playStartTime();
 	rtspClient->sendPlayCommand(*scs.session, continueAfterPLAY);
+}
+
+static void
+SetRecvBufSize(RTPSource *rtpsrc) {
+	Groupsock *gs = NULL;
+	int s;
+#ifdef WIN32
+	DWORD bufsz;
+	int buflen;
+#else
+	int bufsz;
+	socklen_t buflen;
+#endif
+	//
+	if(rtpsrc == NULL) {
+		rtsperror("Receiver buffer size: no RTPSource available.\n");
+		return;
+	}
+	//
+	gs = rtpsrc->RTPgs();
+	if(gs == NULL) {
+		rtsperror("Receiver buffer size: no Groupsock available.\n");
+		return;
+	}
+	//
+	s = gs->socketNum();
+	//
+	bufsz = RCVBUF_SIZE;
+	if(setsockopt(s, SOL_SOCKET, SO_RCVBUF, (char*) &bufsz, sizeof(bufsz)) != 0) {
+		rtsperror("Receiver buffer size: set failed (%d).\n", RCVBUF_SIZE);
+		return;
+	}
+	//
+	buflen = sizeof(bufsz);
+	if(getsockopt(s, SOL_SOCKET, SO_RCVBUF, (char*) &bufsz, &buflen) != 0) {
+		rtsperror("Receiver buffer size: get failed.\n");
+		return;
+	}
+	//
+	rtsperror("Receiver buffer size: %d bytes.\n", bufsz);
+	return;
 }
 
 static void
@@ -1063,6 +1184,8 @@ continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
 		if (scs.subsession->rtcpInstance() != NULL) {
 			scs.subsession->rtcpInstance()->setByeHandler(subsessionByeHandler, scs.subsession);
 		}
+		// Set receiver buffer size
+		SetRecvBufSize(scs.subsession->rtpSource());
 		// NAT hole-punching?
 		NATHolePunch(scs.subsession->rtpSource(), scs.subsession);
 	} while (0);
@@ -1204,7 +1327,7 @@ ourRTSPClient::createNew(UsageEnvironment& env, char const* rtspURL,
 
 ourRTSPClient::ourRTSPClient(UsageEnvironment& env, char const* rtspURL,
 	int verbosityLevel, char const* applicationName, portNumBits tunnelOverHTTPPortNum)
-	: RTSPClient(env,rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum) {
+	: RTSPClient(env,rtspURL, verbosityLevel, applicationName, tunnelOverHTTPPortNum, -1) {
 }
 
 ourRTSPClient::~ourRTSPClient() {

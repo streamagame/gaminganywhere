@@ -28,6 +28,7 @@
 #include "server.h"
 #include "controller.h"
 #include "encoder-common.h"
+#include "ctrl-sdl.h"
 
 #include "hook-function.h"
 #include "ga-hook-common.h"
@@ -51,7 +52,7 @@ static int hookid = 0;
 
 //static struct gaRect rect;
 
-static struct ga_module *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl;
+static ga_module_t *m_filter, *m_vencoder, *m_asource, *m_aencoder, *m_ctrl;
 
 static int module_checked = 0;
 
@@ -542,6 +543,7 @@ hook_proc(int nCode, WPARAM wParam, LPARAM lParam) {
 	// SDL: override controller
 	if(strcasecmp(hook_type, "sdl") == 0) {
 		sdl12_mapinit();
+		sdlmsg_kb_init();
 		ctrl_server_setreplay(sdl_hook_replay_callback);
 		no_default_controller = 1;
 		ga_error("hook_proc: sdl - use native replayer.\n");
