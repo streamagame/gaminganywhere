@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Chun-Ying Huang
+ * Copyright (c) 2013-2014 Chun-Ying Huang
  *
  * This file is part of GamingAnywhere (GA).
  *
@@ -70,11 +70,11 @@ static RTSPThreadParam rtspThreadParam;
 
 static int relativeMouseMode = 0;
 static int showCursor = 1;
-static int windowSizeX[IMAGE_SOURCE_CHANNEL_MAX];
-static int windowSizeY[IMAGE_SOURCE_CHANNEL_MAX];
+static int windowSizeX[VIDEO_SOURCE_CHANNEL_MAX];
+static int windowSizeY[VIDEO_SOURCE_CHANNEL_MAX];
 // support resizable window
-static int nativeSizeX[IMAGE_SOURCE_CHANNEL_MAX];
-static int nativeSizeY[IMAGE_SOURCE_CHANNEL_MAX];
+static int nativeSizeX[VIDEO_SOURCE_CHANNEL_MAX];
+static int nativeSizeY[VIDEO_SOURCE_CHANNEL_MAX];
 static map<unsigned int, int> windowId2ch;
 
 #ifndef ANDROID
@@ -143,7 +143,7 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 #endif
 	struct SwsContext *swsctx = NULL;
 	pipeline *pipe = NULL;
-	struct pooldata *data = NULL;
+	pooldata_t *data = NULL;
 	char windowTitle[64];
 	//
 	pthread_mutex_lock(&rtspParam->surfaceMutex[ch]);
@@ -214,6 +214,12 @@ create_overlay(struct RTSPThreadParam *rtspParam, int ch) {
 		SDL_SetRelativeMouseMode(SDL_TRUE);
 		showCursor = 0;
 		//SDL_ShowCursor(0);
+#if 0		//// XXX: EXPERIMENTAL - switch twice to make it normal?
+		switch_grab_input(NULL);
+		SDL_SetRelativeMouseMode(SDL_FALSE);
+		switch_grab_input(NULL);
+		SDL_SetRelativeMouseMode(SDL_TRUE);
+#endif		////
 		ga_error("ga-client: relative mouse mode enabled.\n");
 	}
 	//
@@ -362,7 +368,7 @@ render_text(SDL_Renderer *renderer, SDL_Window *window, int x, int y, int line, 
 #if 1
 static void
 render_image(struct RTSPThreadParam *rtspParam, int ch) {
-	struct pooldata *data;
+	pooldata_t *data;
 	AVPicture *vframe;
 	SDL_Rect rect;
 #if 1	// only support SDL2
@@ -720,6 +726,10 @@ main(int argc, char *argv[]) {
 		rtsperror("SDL init failed: %s\n", SDL_GetError());
 		return -1;
 	}
+	if(rtspconf->video_renderer_software == 0) {
+		ga_error("SDL: prefer opengl hardware renderer.\n");
+		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+	}
 #if 0	// only support SDL2
 	// enable keyboard repeat?
 	SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL);
@@ -751,7 +761,7 @@ main(int argc, char *argv[]) {
 	}
 	//
 	bzero(&rtspThreadParam, sizeof(rtspThreadParam));
-	for(i = 0; i < IMAGE_SOURCE_CHANNEL_MAX; i++) {
+	for(i = 0; i < VIDEO_SOURCE_CHANNEL_MAX; i++) {
 		pthread_mutex_init(&rtspThreadParam.surfaceMutex[i], NULL);
 	}
 	pthread_mutex_init(&rtspThreadParam.audioMutex, NULL);
