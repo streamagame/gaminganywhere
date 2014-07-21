@@ -354,7 +354,7 @@ vencoder_stop(void *arg) {
 
 static void *
 vencoder_raw(void *arg, int *size) {
-#if defined __APPLE__
+#if defined __x86_64__ // __APPLE__
 	int64_t in = (int64_t) arg;
 	int iid = (int) (in & 0xffffffffLL);
 #else
@@ -436,7 +436,7 @@ h264_get_sps_pps(int channelId, unsigned char *data, int datalen) {
 static void *
 vencoder_opt1(void *arg, int *size) {
 	AVCodecContext *ve = NULL;
-#if defined __APPLE__
+#if defined __x86_64__ // __APPLE__
 	int64_t in = (int64_t) arg;
 	int iid = (int) (in & 0xffffffffLL);
 #else
@@ -471,7 +471,7 @@ vencoder_opt1(void *arg, int *size) {
 static void *
 vencoder_opt2(void *arg, int *size) {
 	AVCodecContext *ve = NULL;
-#if defined __APPLE__
+#if defined __x86_64__ // __APPLE__
 	int64_t in = (int64_t) arg;
 	int iid = (int) (in & 0xffffffffLL);
 #else
