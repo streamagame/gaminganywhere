@@ -1,6 +1,6 @@
 
 LOCAL_PATH := $(call my-dir)
-
+$(info $(LOCAL_PATH))
 TARGET_PLATFORM := android-14
 TARGET_ARCH_ABI := armeabi-v7a
 

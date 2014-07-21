@@ -17,12 +17,12 @@ export PATH=$GADEPS/bin:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROI
 cd $GAPATH
 
 # Build the dependencies
-if [ ! -d "deps.android" ]; then
+#if [ ! -d "deps.android" ]; then
 	echo "*** Building dependencies ***"
 	cd deps.src/
 	make -f Makefile.android|| exit 1;
 	cd ../
-fi
+#fi
 
 # Build Android Environment
 echo "*** Building Android Environment ***"
