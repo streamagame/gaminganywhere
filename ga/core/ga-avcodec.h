@@ -31,6 +31,11 @@ extern "C" {
 }
 #endif
 
+// Channel restriction to 32 is only defined in older libswresample
+#ifndef SWR_CH_MAX
+#define SWR_CH_MAX 32
+#endif
+
 #include <map>
 #include <string>
 #include <vector>
