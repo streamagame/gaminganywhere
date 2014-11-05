@@ -25,14 +25,23 @@
 #include <dlfcn.h>
 #endif
 
+#ifdef __linux__
+#include <X11/extensions/XTest.h>
+#endif
+
 #include "ga-common.h"
 #include "ga-conf.h"
 #include "vsource.h"
 #include "pipeline.h"
-
+#include "controller.h"
 #include "ga-hook-common.h"
 #include "ga-hook-gl.h"
 #include "ga-hook-lib.h"
+#include "ctrl-sdl.h"
+
+#include "sdl12-event.h"
+#include "sdl12-video.h"
+#include "sdl12-mouse.h"
 
 #include <map>
 using namespace std;
@@ -42,6 +51,9 @@ using namespace std;
 extern "C" {
 #endif
 void glFlush();
+#ifdef __linux__
+void glXSwapBuffers( Display *dpy, GLXDrawable drawable );
+#endif
 #ifdef __cplusplus
 }
 #endif
@@ -49,6 +61,91 @@ void glFlush();
 
 // for hooking
 t_glFlush		old_glFlush = NULL;
+#ifdef __linux__
+t_glXSwapBuffers	old_glXSwapBuffers = NULL;
+
+Display *display = NULL;
+Window window = 0;
+#endif
+
+void
+x11_replay_callback(void *msg, int msglen) {
+	sdlmsg_t *smsg = (sdlmsg_t*) msg;
+#ifdef __linux__
+	if (display == NULL || window == 0) {
+		ga_error("Unable to replay event due to missing display or window.\n");
+		return;
+	}
+	
+   	/*XEvent event;
+	memset(&event, 0x00, sizeof(event));
+	bool success = XQueryPointer(
+		display,
+		window,
+		&event.xbutton.root,
+		&event.xbutton.window,
+		&event.xbutton.x_root,
+		&event.xbutton.y_root,
+		&event.xbutton.x,
+		&event.xbutton.y,
+		&event.xbutton.state);
+		
+	//ga_error("Mouse readings x_root=%u, y_root=%u, x=%u, y=%u, state=%u\n", event.xbutton.x_root, event.xbutton.y_root, event.xbutton.x, event.xbutton.y, event.xbutton.state);
+		
+	// ga_error((success) ? "YES" : "NO");
+	
+	if(!success) {
+		ga_error("Cannot query pointer attributes which are required for the relaying of events.\n");
+		return;
+	}
+	*/
+	
+	sdlmsg_mouse_t *msgm = (sdlmsg_mouse_t*) msg;
+	XTestGrabControl(display, True);
+	switch(smsg->msgtype) {
+		case SDL_EVENT_MSGTYPE_MOUSEMOTION:
+			ga_error("Mouse movement, x: %u y: %u\n", ntohs(msgm->mousex), ntohs(msgm->mousey));
+			{
+				int new_root_x, new_root_y;
+
+				Window child;
+				/*bool success = */XTranslateCoordinates(display, window, DefaultRootWindow(display), ntohs(msgm->mousex), ntohs(msgm->mousey), &new_root_x, &new_root_y, &child);
+				//ga_error("new_x=%d, new_y=%d\n", new_root_x, new_root_y);
+				XTestFakeMotionEvent (display, 0, new_root_x, new_root_y, CurrentTime);
+				
+/*				Display* xdisplay1 = XOpenDisplay(NULL);
+				Window root = DefaultRootWindow(display);
+			XWarpPointer(xdisplay1, None, root, 0, 0, 0, 0, msgm->mousex), ntohs(msgm->mousey))*/
+			}
+			break;
+			
+		case SDL_EVENT_MSGTYPE_MOUSEKEY:
+			ga_error("Mouse button event btn=%u pressed=%d\n", msgm->mousebutton, msgm->is_pressed);
+			/*event.type = (msgm->is_pressed == 1) ? ButtonPress : ButtonRelease;
+			if (event.type == ButtonRelease)
+				event.xbutton.state = 0x100;
+			event.xbutton.button = msgm->mousebutton;
+			event.xbutton.same_screen = True;
+			if(XSendEvent(display, window, True, 0xfff, &event) == 0) ga_error("Error\n");*/
+			XTestFakeButtonEvent (display, 1, (msgm->is_pressed == 1), CurrentTime);
+//			XFlush(display);
+
+			break;
+	}
+	XSync(display, True);
+	XTestGrabControl(display, False);
+	
+	/*if(smsg->msgtype == SDL_EVENT_MSGTYPE_MOUSEMOTION) {
+		sdlmsg_mouse_t *msgm = (sdlmsg_mouse_t*) msg;
+		ga_error("Mouse movement, x: %u y: %u, %s\n", ntohs(msgm->mousex), ntohs(msgm->mousey), (msgm->is_pressed != 0) ? "pressed" : "");
+		
+	}*/
+	// sdlmsg_ntoh(smsg);
+	// sdl12_hook_replay(smsg);
+	//	ga_error("Hello World");
+    #endif
+	return;
+}
 
 static void
 gl_global_init() {
@@ -57,6 +154,13 @@ gl_global_init() {
 	if(initialized != 0)
 		return;
 	//
+	
+	// override controller
+	// sdl12_mapinit();
+	// sdlmsg_replay_init(NULL);
+	ctrl_server_setreplay(x11_replay_callback);
+	no_default_controller = 1;
+	
 	if(pthread_create(&t, NULL, ga_server, NULL) != 0) {
 		ga_error("ga_hook: create thread failed.\n");
 		exit(-1);
@@ -84,22 +188,34 @@ gl_hook_symbols() {
 	// for hooking
 	old_glFlush = (t_glFlush)
 				ga_hook_lookup_or_quit(handle, "glFlush");
-	ga_error("hook-gl: hooked.\n");
+	ga_error("hook-gl: hooked glFlush.\n");
+
+#ifdef __linux__
+	old_glXSwapBuffers = (t_glXSwapBuffers)ga_hook_lookup_or_quit(handle, "glXSwapBuffers");
+	ga_error("hook_gl: hooked glXSwapBuffers\n");
+#endif
+
 	// indirect hook
 	if((ptr = getenv("HOOKVIDEO")) == NULL)
 		goto quit;
 	strncpy(soname, ptr, sizeof(soname));
 	if((handle = dlopen(soname, RTLD_LAZY)) != NULL) {
 		hook_lib_generic(soname, handle, "glFlush", (void*) hook_glFlush);
+
+#ifdef __linux__
+		hook_lib_generic(soname, handle, "glXSwapBuffers", (void*) hook_glXSwapBuffers);
+#endif
 	}
 	ga_error("hook-gl: hooked into %s.\n", soname);
+
 quit:
 #endif
 	return;
 }
 
 void
-hook_glFlush() {
+copyFrame() {
+#ifdef __linux__
 	static int frame_interval;
 	static struct timeval initialTv, captureTv;
 	static int frameLinesize;
@@ -111,19 +227,15 @@ hook_glFlush() {
 	int vp_x, vp_y, vp_width, vp_height;
 	int i;
 	//
-	pooldata_t *data;
-	vsource_frame_t *frame;
+	struct pooldata *data;
+	struct vsource_frame *frame;
 	//
 	if(global_initialized == 0) {
 		gl_global_init();
 		global_initialized = 1;
 	}
-	//
-	if(old_glFlush == NULL) {
-		gl_hook_symbols();
-	}
-	old_glFlush();
-	// capture the screen
+	
+		// capture the screen
 	glGetIntegerv(GL_VIEWPORT, vp);
 	vp_x = vp[0];
 	vp_y = vp[1];
@@ -158,7 +270,7 @@ hook_glFlush() {
 		frameLinesize = vp_width<<2;
 		//
 		data = g_pipe[0]->allocate_data();
-		frame = (vsource_frame_t*) data->ptr;
+		frame = (struct vsource_frame*) data->ptr;
 		frame->pixelformat = PIX_FMT_RGBA;
 		frame->realwidth = vp_width;
 		frame->realheight = vp_height;
@@ -182,15 +294,53 @@ hook_glFlush() {
 	ga_hook_capture_dupframe(frame);
 	g_pipe[0]->store_data(data);
 	g_pipe[0]->notify_all();		
+#endif
+}
+
+void
+hook_glFlush() {
 	//
+	if(old_glFlush == NULL) {
+		gl_hook_symbols();
+	}
+	old_glFlush();
+	//
+	
+	copyFrame();
 	return;
 }
+
+#ifdef __linux__
+void
+hook_glXSwapBuffers(Display *dpy, GLXDrawable drawable) {
+	display = dpy;
+	window = drawable;
+
+	//
+	if(old_glXSwapBuffers == NULL) {
+		gl_hook_symbols();
+	}
+	old_glXSwapBuffers(dpy, drawable);
+	//printf("JACKPOT");fflush(stdout);
+	//
+	
+	copyFrame();
+	return;
+}
+#endif
 
 #ifndef WIN32	/* POSIX interfaces */
 void
 glFlush() {
 	hook_glFlush();
 }
+
+#ifdef __linux__
+void
+glXSwapBuffers( Display *dpy, GLXDrawable drawable ){
+	hook_glXSwapBuffers(dpy, drawable);
+}
+#endif
 
 __attribute__((constructor))
 static void

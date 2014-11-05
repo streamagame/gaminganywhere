@@ -47,7 +47,7 @@ ga-hook-sdl.$(EXT): $(ADDOBJ) ga-hook-common.o ga-hook-sdl.o ctrl-sdl.o
 ga-hook-sdlaudio.$(EXT): $(ADDOBJ) ga-hook-common.o ga-hook-sdlaudio.o
 	$(MAKEMODULE)
 
-ga-hook-gl.$(EXT): $(ADDOBJ) ga-hook-common.o ga-hook-gl.o
+ga-hook-gl.$(EXT): $(ADDOBJ) ga-hook-common.o ga-hook-gl.o ctrl-sdl.o
 	$(MAKEMODULE)
 
 ga-hook-pulse.$(EXT): $(ADDOBJ) ga-hook-pulse.o

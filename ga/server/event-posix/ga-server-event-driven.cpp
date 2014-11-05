@@ -148,7 +148,7 @@ no_load_env:
 #ifdef __APPLE__
 				"DYLD_LIBRARY_PATH=%s",
 #else
-				"LD_LIBRARY_PATH=%s",
+				"LD_LIBRARY_PATH=%s:$LD_LIBRARY_PATH",
 #endif
 				launch_dir);
 			cmd += env;

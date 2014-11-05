@@ -25,16 +25,27 @@
 #include <GL/gl.h>
 #endif
 
+#ifdef __linux__
+#include <GL/glx.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 typedef void	(*t_glFlush)(void);
+#ifdef __linux__
+typedef void	(*t_glXSwapBuffers)(Display*,GLXDrawable);
+#endif
 #ifdef __cplusplus
 }
 #endif
 
 extern t_glFlush	old_glFlush;
-
 void hook_glFlush();
+
+#ifdef __linux__
+extern t_glXSwapBuffers old_glXSwapBuffers;
+void hook_glXSwapBuffers(Display *dpy, GLXDrawable drawable);
+#endif
 
 #endif
