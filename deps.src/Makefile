@@ -2,7 +2,6 @@
 GADEPS		?= $(HOME)/myprog/gaminganywhere/deps.posix
 MACHINE		= $(shell uname -m)
 SYSTEM		= $(shell uname -s)
-PARALLEL_MAKE	= -j5
 PACKAGES	= sdl2 sdl2_ttf yasm lame opus ogg vorbis theora vpx \
 		  x264 x265 xvid ffmpeg live555
 OSX_CLANG_PATCH	= echo '*** Not on OS X: not applied ***'
@@ -38,94 +37,94 @@ sdl2:
 	$(TGZUNPACK) $(SDL2)
 	mkdir -p $(SDL2DIR)/mybuild
 	cd $(SDL2DIR)/mybuild; ../configure --prefix=$(GADEPS) --with-pic
-	make -C $(SDL2DIR)/mybuild $(PARALLEL_MAKE)
-	make -C $(SDL2DIR)/mybuild install
-	#rm -rf $(SDL2DIR)
+	$(MAKE) -C $(SDL2DIR)/mybuild
+	$(MAKE) -C $(SDL2DIR)/mybuild install
+	rm -rf $(SDL2DIR)
 
-sdl2_ttf:
+sdl2_ttf: sdl2
 	$(TGZUNPACK) $(SDL2_TTF)
 	mkdir -p $(SDL2_TTFDIR)/mybuild
 	cd $(SDL2_TTFDIR)/mybuild; ../configure --prefix=$(GADEPS) --with-pic
-	make -C $(SDL2_TTFDIR)/mybuild $(PARALLEL_MAKE)
-	make -C $(SDL2_TTFDIR)/mybuild install
-	#rm -rf $(SDL2_TTFDIR)
+	$(MAKE) -C $(SDL2_TTFDIR)/mybuild
+	$(MAKE) -C $(SDL2_TTFDIR)/mybuild install
+	rm -rf $(SDL2_TTFDIR)
 
 yasm:
 	$(TGZUNPACK) $(YASM)
 	cd $(YASMDIR); ./configure --prefix=$(GADEPS)
-	make -C $(YASMDIR) $(PARALLEL_MAKE)
-	make -C $(YASMDIR) install
-	#rm -rf $(YASMDIR)
+	$(MAKE) -C $(YASMDIR) $(PARALLEL_MAKE)
+	$(MAKE) -C $(YASMDIR) install
+	rm -rf $(YASMDIR)
 
 lame:
 	$(TGZUNPACK) $(LAME)
 	cd $(LAMEDIR); ./configure --prefix=$(GADEPS) --with-pic
-	make -C $(LAMEDIR) $(PARALLEL_MAKE)
-	make -C $(LAMEDIR) install
-	#rm -rf $(LAMEDIR)
+	$(MAKE) -C $(LAMEDIR)
+	$(MAKE) -C $(LAMEDIR) install
+	rm -rf $(LAMEDIR)
 
 opus:
 	$(TGZUNPACK) $(OPUS)
 	#
 	cd $(OPUSDIR); ./configure --prefix=$(GADEPS) --with-pic
-	make -C $(OPUSDIR) $(PARALLEL_MAKE)
-	make -C $(OPUSDIR) install
-	#rm -rf $(OPUSDIR)
+	$(MAKE) -C $(OPUSDIR)
+	$(MAKE) -C $(OPUSDIR) install
+	rm -rf $(OPUSDIR)
 
 ogg:
 	$(TGZUNPACK) $(OGG)
 	cd $(OGGDIR); ./configure --prefix=$(GADEPS) --with-pic
-	make -C $(OGGDIR) $(PARALLEL_MAKE)
-	make -C $(OGGDIR) install
-	#rm -rf $(OGGDIR)
+	$(MAKE) -C $(OGGDIR)
+	$(MAKE) -C $(OGGDIR) install
+	rm -rf $(OGGDIR)
 
-vorbis:
+vorbis: ogg
 	$(TGZUNPACK) $(VORBIS)
 	# Fix missing reference to ARM6 for Raspberry Pi compilation
 	sed -i.bak 's/armv\[345\]/armv\[3456\]/g' $(VORBISDIR)/config.sub
 	cd $(VORBISDIR); ./configure --prefix=$(GADEPS) --build=$(MACHINE) --with-pic
-	make -C $(VORBISDIR) $(PARALLEL_MAKE)
-	make -C $(VORBISDIR) install
-	#rm -rf $(VORBISDIR)
+	$(MAKE) -C $(VORBISDIR)
+	$(MAKE) -C $(VORBISDIR) install
+	rm -rf $(VORBISDIR)
 
-theora:
+theora: ogg vorbis sdl2
 	$(TBZUNPACK) $(THEORA)
 	cd $(THEORADIR); $(OSX_CLANG_PATCH)
 	cd $(THEORADIR); ./configure --prefix=$(GADEPS) --with-pic --disable-examples
-	make -C $(THEORADIR) $(PARALLEL_MAKE)
-	make -C $(THEORADIR) install
-	#rm -rf $(THEORADIR)
+	$(MAKE) -C $(THEORADIR)
+	$(MAKE) -C $(THEORADIR) install
+	rm -rf $(THEORADIR)
 
-vpx:
+vpx: yasm
 	$(TBZUNPACK) $(VPX)
 	cd $(VPXDIR); ./configure --prefix=$(GADEPS) $(VPX_EXTRA_CONFIG) --enable-pic
-	make -C $(VPXDIR) $(PARALLEL_MAKE)
-	make -C $(VPXDIR) install
-	#rm -rf $(VPXDIR)
+	$(MAKE) -C $(VPXDIR)
+	$(MAKE) -C $(VPXDIR) install
+	rm -rf $(VPXDIR)
 
-x264:
+x264: yasm
 	$(TBZUNPACK) $(X264)
 	cd $(X264DIR); $(OSX_CLANG_PATCH)
 	cd $(X264DIR); ./configure --prefix=$(GADEPS) --enable-shared --enable-pic
-	make -C $(X264DIR) $(PARALLEL_MAKE)
-	make -C $(X264DIR) install
-	#rm -rf $(X264DIR)
+	$(MAKE) -C $(X264DIR)
+	$(MAKE) -C $(X264DIR) install
+	rm -rf $(X264DIR)
 
-x265:
+x265: yasm
 	$(TBZUNPACK) $(X265)
 	cd $(X265DIR)/build/linux; cmake -D CMAKE_INSTALL_PREFIX:PATH=$(GADEPS) ../../source/
-	make -C $(X265DIR)/build/linux $(PARALLEL_MAKE)
-	make -C $(X265DIR)/build/linux install
+	$(MAKE) -C $(X265DIR)/build/linux
+	$(MAKE) -C $(X265DIR)/build/linux install
 	rm -rf $(X265DIR)
 
 xvid:
 	$(TBZUNPACK) $(XVID)
 	cd $(XVIDDIR)/build/generic; ./configure --prefix=$(GADEPS)
-	make -C $(XVIDDIR)/build/generic $(PARALLEL_MAKE)
-	make -C $(XVIDDIR)/build/generic install
-	#rm -rf $(XVIDDIR)
+	$(MAKE) -C $(XVIDDIR)/build/generic
+	$(MAKE) -C $(XVIDDIR)/build/generic install
+	rm -rf $(XVIDDIR)
 
-ffmpeg:
+ffmpeg: lame vorbis theora vpx x264 x265 opus xvid
 	$(TBZUNPACK) $(FFMPEG)
 	cd $(FFMPEGDIR); ./configure --prefix=$(GADEPS) \
 		--enable-shared --enable-pic \
@@ -138,9 +137,9 @@ ffmpeg:
 		--enable-gpl --enable-nonfree --disable-outdev=sdl \
 		--extra-cflags=-I$(GADEPS)/include \
 		--extra-ldflags=-L$(GADEPS)/lib
-	make -C $(FFMPEGDIR) $(PARALLEL_MAKE)
-	make -C $(FFMPEGDIR) install
-	#rm -rf $(FFMPEGDIR)
+	$(MAKE) -C $(FFMPEGDIR)
+	$(MAKE) -C $(FFMPEGDIR) install
+	rm -rf $(FFMPEGDIR)
 
 live555:
 	$(TGZUNPACK) $(LIVE555)
@@ -152,11 +151,12 @@ live555:
 	cd $(LIVE555DIR); cat ../patches/live555-* | patch -p1 
 	#
 	cd $(LIVE555DIR); ./genMakefiles $(shell uname -s | tr A-Z a-z | sed -e 's,darwin,macosx,' -e 's,cygwin.*,cygwin,')
-	make -C $(LIVE555DIR) $(PARALLEL_MAKE)
+	$(MAKE) -C $(LIVE555DIR)
 	-mkdir -p $(GADEPS)/lib
 	find $(LIVE555DIR) -name '*.a' -exec cp -f {} $(GADEPS)/lib \;
 	-mkdir -p $(GADEPS)/include/live555
 	find $(LIVE555DIR) -name '*.hh' -exec cp -f {} $(GADEPS)/include/live555 \;
 	cp -f $(LIVE555DIR)/groupsock/include/NetCommon.h $(GADEPS)/include/live555
-	#rm -rf $(LIVE555DIR)
+	rm -rf $(LIVE555DIR)
 
+.PHONY: all $(PACKAGES)

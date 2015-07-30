@@ -3,33 +3,33 @@
 
 TARGET	= core module server client
 
-.PHONY: $(TARGET)
+.PHONY: all $(TARGET)
 
 all: $(TARGET)
 
 core:
-	make -C core
+	$(MAKE) -C core
 
 module: core
-	make -C module
+	$(MAKE) -C module
 
 server: core
-	make -C server
+	$(MAKE) -C server
 
 client: core
-	make -C client
+	$(MAKE) -C client
 
 install:
 	mkdir -p ../bin
-	make -C core install
-	make -C module install
-	make -C server install
-	make -C client install
+	$(MAKE) -C core install
+	$(MAKE) -C module install
+	$(MAKE) -C server install
+	$(MAKE) -C client install
 	cp -fr config ../bin/
 
 clean:
-	make -C core clean
-	make -C module clean
-	make -C server clean
-	make -C client clean
+	$(MAKE) -C core clean
+	$(MAKE) -C module clean
+	$(MAKE) -C server clean
+	$(MAKE) -C client clean
 

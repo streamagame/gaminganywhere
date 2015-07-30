@@ -1,8 +1,10 @@
-#!/bin/bash
+#!/bin/bash -x
 
 pushd `dirname $0` > /dev/null
 GAPATH=`pwd`
 popd > /dev/null
+
+export PARALLEL_MAKE="-j5"
 
 export GADEPS=$GAPATH/deps.posix
 export PKG_CONFIG_PATH=$GADEPS/lib/pkgconfig:/opt/local/lib/pkgconfig:/usr/lib/i386-linux-gnu/pkgconfig/:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig
@@ -15,14 +17,14 @@ cd $GAPATH
 if [ ! -d "deps.posix" ]; then
 	echo "*** Building dependencies ***"
 	cd deps.src/
-	make || exit 1;
+	make $PARALLEL_MAKE || exit 1;
 	cd ../
 fi
 
 # Build GamingAnywhere
 echo "*** Building GamingAnywhere ***"
 cd ga/
-make all || exit 1;
+make $PARALLEL_MAKE all || exit 1;
 make install || exit 1;
 cd ../
 
