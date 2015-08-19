@@ -59,6 +59,19 @@ void glXSwapBuffers( Display *dpy, GLXDrawable drawable );
 #endif
 #endif
 
+// Configuration
+const unsigned MINIMUM_FRAME_RATE = 30; // fps
+
+// For duplicate frame generation (since OpenGL does not deliver updates if nothing changes)
+static struct timeval previous_frame_tv = { 0 };
+static vsource_frame_t previous_frame = { 0 };
+pthread_cond_t new_frame_captured_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t new_frame_captured_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t pipe_access_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static struct timeval initialTv = { 0 };
+static int frame_interval;
+
 // for hooking
 t_glFlush		old_glFlush = NULL;
 #ifdef __linux__
@@ -68,6 +81,78 @@ Display *display = NULL;
 Window window = 0;
 #endif
 
+// Thanks to https://gist.github.com/BinaryPrison/1112092 for this code.
+static inline uint32_t __iter_div_u64_rem(uint64_t dividend, uint32_t divisor, uint64_t *remainder)
+{
+  uint32_t ret = 0;
+
+  while (dividend >= divisor) {
+    /* The following asm() prevents the compiler from
+       optimising this loop into a modulo operation.  */
+    asm("" : "+rm"(dividend));
+
+    dividend -= divisor;
+    ret++;
+  }
+
+  *remainder = dividend;
+
+  return ret;
+}
+
+#define NSEC_PER_SEC  1000000000L
+static inline void timespec_add_ns(struct timespec *a, uint64_t ns)
+{
+  a->tv_sec += __iter_div_u64_rem(a->tv_nsec + ns, NSEC_PER_SEC, &ns);
+  a->tv_nsec = ns;
+}
+
+static void *
+frame_injection_threadproc(void *arg)
+{
+	ga_error("Frame injection thread entered.\n");
+
+	while (1)
+	{
+		// Wait until a frame is captured
+		struct timeval tv;
+		struct timespec to;
+		gettimeofday(&tv, NULL);
+		to.tv_sec = tv.tv_sec;
+		to.tv_nsec = tv.tv_usec * 1000;
+		timespec_add_ns(&to, NSEC_PER_SEC / MINIMUM_FRAME_RATE);
+
+		int wait_result = pthread_cond_timedwait(&new_frame_captured_cond, &new_frame_captured_mutex, &to);
+
+		struct timeval now;
+		gettimeofday(&now, NULL);
+
+		if (wait_result == ETIMEDOUT &&
+			previous_frame_tv.tv_sec > 0 &&
+			tvdiff_us(&now, &previous_frame_tv) > 1000000 / MINIMUM_FRAME_RATE &&
+			previous_frame.realsize > 0)
+		{
+			pthread_mutex_lock(&pipe_access_mutex);
+			// Inject previous frame again
+			pooldata_t *data = g_pipe[0]->allocate_data();
+			vsource_frame_t *frame = (vsource_frame_t *) data->ptr;
+			vsource_dup_frame(&previous_frame, frame);
+
+			// Generate presentation time stamp
+			struct timeval repeat_tv;
+			gettimeofday(&repeat_tv, NULL);
+			frame->imgpts = tvdiff_us(&repeat_tv, &initialTv)/frame_interval;
+
+			// duplicate from channel 0 to other channels
+			ga_hook_capture_dupframe(frame);
+			g_pipe[0]->store_data(data);
+			g_pipe[0]->notify_all();
+			pthread_mutex_unlock(&pipe_access_mutex);
+			// ga_error("Frame injected.\n");
+		}
+	}
+}
+
 void
 x11_replay_callback(void *msg, int msglen) {
 	sdlmsg_t *smsg = (sdlmsg_t*) msg;
@@ -76,7 +161,7 @@ x11_replay_callback(void *msg, int msglen) {
 		ga_error("Unable to replay event due to missing display or window.\n");
 		return;
 	}
-	
+
    	/*XEvent event;
 	memset(&event, 0x00, sizeof(event));
 	bool success = XQueryPointer(
@@ -99,7 +184,7 @@ x11_replay_callback(void *msg, int msglen) {
 		return;
 	}
 	*/
-	
+
 	sdlmsg_mouse_t *msgm = (sdlmsg_mouse_t*) msg;
 	XTestGrabControl(display, True);
 	switch(smsg->msgtype) {
@@ -112,13 +197,13 @@ x11_replay_callback(void *msg, int msglen) {
 				/*bool success = */XTranslateCoordinates(display, window, DefaultRootWindow(display), ntohs(msgm->mousex), ntohs(msgm->mousey), &new_root_x, &new_root_y, &child);
 				//ga_error("new_x=%d, new_y=%d\n", new_root_x, new_root_y);
 				XTestFakeMotionEvent (display, 0, new_root_x, new_root_y, CurrentTime);
-				
+
 /*				Display* xdisplay1 = XOpenDisplay(NULL);
 				Window root = DefaultRootWindow(display);
 			XWarpPointer(xdisplay1, None, root, 0, 0, 0, 0, msgm->mousex), ntohs(msgm->mousey))*/
 			}
 			break;
-			
+
 		case SDL_EVENT_MSGTYPE_MOUSEKEY:
 			ga_error("Mouse button event btn=%u pressed=%d\n", msgm->mousebutton, msgm->is_pressed);
 			/*event.type = (msgm->is_pressed == 1) ? ButtonPress : ButtonRelease;
@@ -134,7 +219,7 @@ x11_replay_callback(void *msg, int msglen) {
 	}
 	XSync(display, True);
 	XTestGrabControl(display, False);
-	
+
 	/*if(smsg->msgtype == SDL_EVENT_MSGTYPE_MOUSEMOTION) {
 		sdlmsg_mouse_t *msgm = (sdlmsg_mouse_t*) msg;
 		ga_error("Mouse movement, x: %u y: %u, %s\n", ntohs(msgm->mousex), ntohs(msgm->mousey), (msgm->is_pressed != 0) ? "pressed" : "");
@@ -150,20 +235,25 @@ x11_replay_callback(void *msg, int msglen) {
 static void
 gl_global_init() {
 	static int initialized = 0;
-	pthread_t t;
+	pthread_t ga_server_thread;
+	pthread_t frame_injection_thread;
 	if(initialized != 0)
 		return;
 	//
-	
+
 	// override controller
 	// sdl12_mapinit();
 	// sdlmsg_replay_init(NULL);
 	ctrl_server_setreplay(x11_replay_callback);
 	no_default_controller = 1;
-	
-	if(pthread_create(&t, NULL, ga_server, NULL) != 0) {
+
+	if(pthread_create(&ga_server_thread, NULL, ga_server, NULL) != 0) {
 		ga_error("ga_hook: create thread failed.\n");
 		exit(-1);
+	}
+
+	if(pthread_create(&frame_injection_thread, NULL, frame_injection_threadproc, NULL) != 0) {
+		ga_error("ga_hook: create thread for frame injection failed.\n");
 	}
 
 	initialized = 1;
@@ -216,8 +306,7 @@ quit:
 void
 copyFrame() {
 #ifdef __linux__
-	static int frame_interval;
-	static struct timeval initialTv, captureTv;
+	static struct timeval captureTv;
 	static int frameLinesize;
 	static unsigned char *frameBuf;
 	static int sb_initialized = 0;
@@ -234,13 +323,13 @@ copyFrame() {
 		gl_global_init();
 		global_initialized = 1;
 	}
-	
+
 		// capture the screen
 	glGetIntegerv(GL_VIEWPORT, vp);
 	vp_x = vp[0];
 	vp_y = vp[1];
 	vp_width = vp[2];
-	vp_height = vp[3];		
+	vp_height = vp[3];
 	//
 	if(ga_hook_capture_prepared(vp_width, vp_height, 1) < 0)
 		return;
@@ -264,6 +353,8 @@ copyFrame() {
 		return;
 	}
 	//
+	pthread_mutex_lock(&pipe_access_mutex);
+
 	do {
 		unsigned char *src, *dst;
 		//
@@ -290,10 +381,22 @@ copyFrame() {
 		}
 		frame->imgpts = tvdiff_us(&captureTv, &initialTv)/frame_interval;
 	} while(0);
+
 	// duplicate from channel 0 to other channels
 	ga_hook_capture_dupframe(frame);
 	g_pipe[0]->store_data(data);
-	g_pipe[0]->notify_all();		
+	g_pipe[0]->notify_all();
+
+	previous_frame_tv = captureTv;
+	if (frame->imgbufsize > previous_frame.imgbufsize) {
+		free(previous_frame.imgbuf);
+		previous_frame.imgbuf = (unsigned char*)malloc(frame->imgbufsize);
+		previous_frame.imgbufsize = frame->imgbufsize;
+	}
+	vsource_dup_frame(frame, &previous_frame);
+
+	pthread_mutex_unlock(&pipe_access_mutex);
+	pthread_cond_broadcast(&new_frame_captured_cond);
 #endif
 }
 
@@ -305,7 +408,7 @@ hook_glFlush() {
 	}
 	old_glFlush();
 	//
-	
+
 	copyFrame();
 	return;
 }
@@ -323,7 +426,7 @@ hook_glXSwapBuffers(Display *dpy, GLXDrawable drawable) {
 	old_glXSwapBuffers(dpy, drawable);
 	//printf("JACKPOT");fflush(stdout);
 	//
-	
+
 	copyFrame();
 	return;
 }
@@ -353,4 +456,5 @@ gl_hook_loaded(void) {
 	return;
 }
 #endif /* ! WIN32 */
+
 
