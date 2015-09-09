@@ -59,9 +59,6 @@ void glXSwapBuffers( Display *dpy, GLXDrawable drawable );
 #endif
 #endif
 
-// Configuration
-const unsigned MINIMUM_FRAME_RATE = 30; // fps
-
 // For duplicate frame generation (since OpenGL does not deliver updates if nothing changes)
 static struct timeval previous_frame_tv = { 0 };
 static vsource_frame_t previous_frame = { 0 };
@@ -71,6 +68,7 @@ pthread_mutex_t pipe_access_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static struct timeval initialTv = { 0 };
 static int frame_interval;
+static int pts = 0;
 
 // for hooking
 t_glFlush		old_glFlush = NULL;
@@ -112,6 +110,10 @@ frame_injection_threadproc(void *arg)
 {
 	ga_error("Frame injection thread entered.\n");
 
+	// Set minimum framerate to maintain:
+	struct RTSPConf *rtspconf = rtspconf_global();
+	unsigned int minimum_frame_rate = rtspconf->video_fps * 0.8; // maintain at least 80% of configured frame rate
+
 	while (1)
 	{
 		// Wait until a frame is captured
@@ -120,7 +122,7 @@ frame_injection_threadproc(void *arg)
 		gettimeofday(&tv, NULL);
 		to.tv_sec = tv.tv_sec;
 		to.tv_nsec = tv.tv_usec * 1000;
-		timespec_add_ns(&to, NSEC_PER_SEC / MINIMUM_FRAME_RATE);
+		timespec_add_ns(&to, NSEC_PER_SEC / minimum_frame_rate);
 
 		int wait_result = pthread_cond_timedwait(&new_frame_captured_cond, &new_frame_captured_mutex, &to);
 
@@ -129,7 +131,7 @@ frame_injection_threadproc(void *arg)
 
 		if (wait_result == ETIMEDOUT &&
 			previous_frame_tv.tv_sec > 0 &&
-			tvdiff_us(&now, &previous_frame_tv) > 1000000 / MINIMUM_FRAME_RATE &&
+			tvdiff_us(&now, &previous_frame_tv) > 1000000 / minimum_frame_rate &&
 			previous_frame.realsize > 0)
 		{
 			pthread_mutex_lock(&pipe_access_mutex);
@@ -141,7 +143,8 @@ frame_injection_threadproc(void *arg)
 			// Generate presentation time stamp
 			struct timeval repeat_tv;
 			gettimeofday(&repeat_tv, NULL);
-			frame->imgpts = tvdiff_us(&repeat_tv, &initialTv)/frame_interval;
+			long long new_pts = tvdiff_us(&repeat_tv, &initialTv)/frame_interval;
+			frame->imgpts = pts++; // new_pts
 
 			// duplicate from channel 0 to other channels
 			ga_hook_capture_dupframe(frame);
@@ -379,7 +382,7 @@ copyFrame() {
 			dst += frameLinesize/*frame->stride*/;
 			src -= frameLinesize;
 		}
-		frame->imgpts = tvdiff_us(&captureTv, &initialTv)/frame_interval;
+		frame->imgpts = pts++; //tvdiff_us(&captureTv, &initialTv)/frame_interval;
 	} while(0);
 
 	// duplicate from channel 0 to other channels
