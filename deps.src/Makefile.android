@@ -10,7 +10,7 @@ TOOLCHAIN_ABI	= armeabi-v7a
 LINKSTL		= shared
 HAS_NEON	= yes
 TARGET_PLATFORM	= android-9
-NDK_ROOT	= $(HOME)/android/android-ndk/.
+NDK_ROOT	?= $(HOME)/android/android-ndk/.
 
 TARGET		= arm-linux
 TARGET_VPX	= armv7-android-gcc

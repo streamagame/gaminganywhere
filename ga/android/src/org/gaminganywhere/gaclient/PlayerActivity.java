@@ -22,6 +22,7 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
 import org.gaminganywhere.gaclient.util.GAController;
+import org.gaminganywhere.gaclient.util.GAControllerTransparent;
 import org.gaminganywhere.gaclient.util.GAControllerBasic;
 import org.gaminganywhere.gaclient.util.GAControllerDualPad;
 import org.gaminganywhere.gaclient.util.GAControllerLimbo;
@@ -199,6 +200,8 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 		do {
 			String cname = intent.getStringExtra("controller");
 			if(cname == null) {
+				controller = new GAControllerTransparent(this);
+			} else if(cname.equals(GAControllerBasic.getName())) {
 				controller = new GAControllerBasic(this);
 			} else if(cname.equals(GAControllerDualPad.getName())) {
 				controller = new GAControllerDualPad(this);
@@ -213,7 +216,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 			} else if(cname.equals(GAControllerPSP.getName())) {
 				controller = new GAControllerPSP(this);
 			} else {
-				controller = new GAControllerBasic(this);
+				controller = new GAControllerTransparent(this);
 			}
 			controller.setViewDimension(viewWidth, viewHeight);
 		} while(false);
@@ -269,12 +272,12 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 
 	@Override
 	public void surfaceCreated(SurfaceHolder holder) {
-		Log.d("ga_log", "surface created.");
+		Log.d("ga_log", "sufrace created.");
 	}
 
 	@Override
 	public void surfaceDestroyed(SurfaceHolder holder) {
-		Log.d("ga_log", "surface destroyed.");
+		Log.d("ga_log", "sufrace destroyed.");
 	}
 
 	// GL
@@ -300,7 +303,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 
 	@Override
 	public void onSurfaceChanged(GL10 gl, int width, int height) {
-		Log.d("ga_log", "GL surface changed, "
+		Log.d("ga_log", "GL sufrace changed, "
 				+ "width=" + Integer.toString(width)
 				+ "; height=" + Integer.toString(height));
 		if (client != null)
@@ -309,6 +312,6 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 
 	@Override
 	public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-		Log.d("ga_log", "GL surface created.");
+		Log.d("ga_log", "GL sufrace created.");
 	}
 }
