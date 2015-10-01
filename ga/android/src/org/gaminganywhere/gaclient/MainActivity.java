@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
+import org.gaminganywhere.gaclient.util.GAControllerTransparent;
 import org.gaminganywhere.gaclient.util.GAControllerBasic;
 import org.gaminganywhere.gaclient.util.GAControllerDualPad;
 import org.gaminganywhere.gaclient.util.GAControllerLimbo;
@@ -279,6 +280,11 @@ public class MainActivity extends Activity implements
 		do {
 			HashMap<String,String> item = null;
 			SimpleAdapter adapter = null;
+			//
+			item = new HashMap<String,String>();
+			item.put("name", GAControllerTransparent.getName());
+			item.put("desc", GAControllerTransparent.getDescription());
+			list_control.add(item);
 			//
 			item = new HashMap<String,String>();
 			item.put("name", GAControllerBasic.getName());

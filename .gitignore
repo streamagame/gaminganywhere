@@ -34,6 +34,11 @@
 # GamingAnywhere-specific
 bin/
 deps.posix/
+deps.android/
+ga/android/bin/
+ga/android/gen/
+ga/android/obj/
+ga/android/local.properties
 ga/client/ga-client
 ga/server/event-posix/ga-server-event-driven
 ga/server/periodic/ga-server-periodic
