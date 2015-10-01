@@ -1,7 +1,7 @@
 
 GADEPS		?= $(HOME)/myprog/gaminganywhere/deps.android
 MACHINE		= $(shell uname -m)
-PACKAGES	= sdl2 yasm lame opus ogg vorbis theora vpx x264 ffmpeg live555
+PACKAGES	= lame sdl2 yasm lame opus ogg vorbis theora vpx x264 ffmpeg live555
 
 TBZUNPACK	= tar xjf
 TGZUNPACK	= tar xzf
@@ -10,7 +10,7 @@ TOOLCHAIN_ABI	= armeabi-v7a
 LINKSTL		= shared
 HAS_NEON	= yes
 TARGET_PLATFORM	= android-9
-NDK_ROOT	= $(HOME)/android/android-ndk/.
+NDK_ROOT	?= $(HOME)/android/android-ndk/.
 
 TARGET		= arm-linux
 TARGET_VPX	= armv7-android-gcc

@@ -6,12 +6,12 @@ popd > /dev/null
 
 export KERNEL=`uname -s | tr A-Z a-z`
 # Adapt to own file structure!
-export ANDROID_HOME=$HOME/android/sdk/.
-export NDK_ROOT=$HOME/android/android-ndk/.
+export ANDROID_HOME=$HOME/android/android-sdk-linux/.
+export NDK_ROOT=$HOME/android/android-ndk-r8b/.
 
 export GADEPS=$GAPATH/deps.android
 export PKG_CONFIG_PATH=$GADEPS/lib/pkgconfig
-export PATH=$GADEPS/bin:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools:$NDK_ROOT:$NDK_ROOT/toolchains/arm-linux-androideabi-4.6/prebuilt/$KERNEL"-x86_64"/bin:$PATH
+export PATH=$GADEPS/bin:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools:$NDK_ROOT:$NDK_ROOT/toolchains/arm-linux-androideabi-4.8/prebuilt/$KERNEL"-x86_64"/bin:$PATH
 
 
 cd $GAPATH
