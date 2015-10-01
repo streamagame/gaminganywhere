@@ -124,11 +124,8 @@ public class GAClient {
 	private int watchdogTimeout = 3;	// default
 
 	public boolean watchdogSetTimeout(int to) {
-		if(watchdogTimeout > 0) {
-			watchdogTimeout = to;
-			return true;
-		}
-		return false;
+		watchdogTimeout = to;
+		return true;
 	}
 	
 	private void watchdogThreadProc() {
@@ -138,6 +135,11 @@ public class GAClient {
 		while(!Thread.interrupted() && !quitWatchdog) {
 			try {
 				Thread.sleep(1000);
+				if(watchdogTimeout < 0) {
+					// disabled
+					lastTick = watchdogTick;
+					continue;
+				}
 				if(watchdogTick != lastTick) {
 					idle = 0;
 					lastTick = watchdogTick;
@@ -287,7 +289,7 @@ public class GAClient {
 		//outputBuffers = vdecoder.getOutputBuffers();
 		videoRendered = false;
 		Log.d("ga_log", "videoRenderer started.");
-		while(!Thread.interrupted() && !quitAudioRenderer) {
+		while(!Thread.interrupted() && !quitVideoRenderer) {
 			outbufIdx = vdecoder.dequeueOutputBuffer(bufinfo, 500000);
 			switch (outbufIdx) {
 			case MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED:
@@ -640,9 +642,17 @@ public class GAClient {
 				pos = inputVBuffers[currVInbufIdx].position();
 				remaining = inputVBuffers[currVInbufIdx].remaining();
 				if(flag==currVFlag && remaining >= size && currVPts == presentationTimeUs
+				&& rtpMarker == false
 				/*&&(pos < vbufferLevel || vbufferLevel<=0)*/) {
+					 /* Queue without decoding */
 					inputVBuffers[currVInbufIdx].put(data, 0, size);
 				} else {
+					boolean queued = false;
+					if(flag==currVFlag && remaining >= size && currVPts == presentationTimeUs
+					&& rtpMarker) {
+						inputVBuffers[currVInbufIdx].put(data, 0, size);
+						queued = true;
+					}
 //					Log.d("ga_log", "decodeVideo: submit,"
 //							+ " pts=" + Long.toString(currVPts)
 //							+ " position="+inputVBuffers[currVInbufIdx].position()
@@ -656,7 +666,9 @@ public class GAClient {
 						currVPts = presentationTimeUs;
 						currVFlag = flag;
 						inputVBuffers[currVInbufIdx].clear();
-						inputVBuffers[inbufIdx].put(data, 0, size);
+						if(queued == false) {
+							inputVBuffers[inbufIdx].put(data, 0, size);
+						}
 					} else {
 						currVInbufIdx = -1;
 						currVPts = -1;
@@ -729,6 +741,7 @@ public class GAClient {
 		setBuiltinVideoInternal(enable);
 	}
 	public native void setAudioCodec(int samplerate, int channels);
+	public native void setDropLateVideoFrame(int ms);
 	// control methods
 	public native void sendKeyEvent(boolean pressed, int scancode, int sym, int mod, int unicode);
 	public native void sendMouseKey(boolean pressed, int button, int x, int y);

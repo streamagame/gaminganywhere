@@ -2,10 +2,12 @@
 include ../Makefile.def
 
 EXT		= so
-CFLAGS		= -O2 -fPIC -g -Wall -I$(GADEPS)/include $(EXTRACFLAGS) -I../../core -DPIPELINE_FILTER \
-		  -DGA_MODULE $(AVCCF) $(L5CF) $(SDLCF)
-#		-D__STDC_CONSTANT_MACROS
+CFLAGS		+= -I../../core -DGA_MODULE $(AVCCF) $(L5CF) $(SDLCF)
+ifeq ($(strip $(GA_ANDROID)),)
 LDFLAGS		= #-L../../core -lga #$(AVCLD) $(SDLLD)
+else
+LDFLAGS		= --sysroot=$(SYSROOT)
+endif
 
 MAKEMODULE	= $(CXX) -o $(TARGET) -shared $^ $(LDFLAGS)
 

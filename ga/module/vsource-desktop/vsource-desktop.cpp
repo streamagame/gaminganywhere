@@ -19,15 +19,16 @@
 #include <stdio.h>
 #include <pthread.h>
 #ifndef WIN32
+#include <unistd.h>
 #include <sys/time.h>
 #endif
 
 #include <map>
 
-#include "server.h"
 #include "vsource.h"
-#include "pipeline.h"
+#include "dpipe.h"
 #include "encoder-common.h"
+#include "rtspconf.h"
 
 #include "ga-common.h"
 
@@ -50,7 +51,8 @@
 
 #include "vsource-desktop.h"
 
-#define	SOURCES	1
+#define	SOURCES			1
+//#define	ENABLE_EMBED_COLORCODE	1	/* XXX: enabled at the filter, not here */
 
 using namespace std;
 
@@ -63,6 +65,11 @@ static struct gaImage realimage, *image = &realimage;
 static int vsource_initialized = 0;
 static int vsource_started = 0;
 static pthread_t vsource_tid;
+
+/* support reconfiguration of frame rate */
+static int vsource_framerate_n = -1;
+static int vsource_framerate_d = -1;
+static int vsource_reconfigured = 0;
 
 /* video source has to send images to video-# pipes */
 /* the format is defined in VIDEO_SOURCE_PIPEFORMAT */
@@ -78,7 +85,9 @@ vsource_init(void *arg) {
 	//
 	if(vsource_initialized != 0)
 		return 0;
-	//
+#ifdef ENABLE_EMBED_COLORCODE
+	vsource_embed_colorcode_init(1/*RGBmode*/);
+#endif
 	if(rect != NULL) {
 		if(ga_fillrect(&croprect, rect->left, rect->top, rect->right, rect->bottom) == NULL) {
 			ga_error("video source: invalid rect (%d,%d)-(%d,%d)\n",
@@ -161,42 +170,58 @@ vsource_init(void *arg) {
 static void *
 vsource_threadproc(void *arg) {
 	int i;
+	int token;
 	int frame_interval;
 	struct timeval tv;
-	pooldata_t *data;
+	dpipe_buffer_t *data;
 	vsource_frame_t *frame;
-	pipeline *pipe[SOURCES];
-#ifdef WIN32
-	LARGE_INTEGER initialTv, captureTv, freq;
-#else
-	struct timeval initialTv, captureTv;
-#endif
+	dpipe_t *pipe[SOURCES];
+	struct timeval initialTv, lastTv, captureTv;
 	struct RTSPConf *rtspconf = rtspconf_global();
+	// reset framerate setup
+	vsource_framerate_n = rtspconf->video_fps;
+	vsource_framerate_d = 1;
+	vsource_reconfigured = 0;
 	//
 	frame_interval = 1000000/rtspconf->video_fps;	// in the unif of us
 	frame_interval++;
-	//
+#ifdef ENABLE_EMBED_COLORCODE
+	vsource_embed_colorcode_reset();
+#endif
 	for(i = 0; i < SOURCES; i++) {
 		char pipename[64];
 		snprintf(pipename, sizeof(pipename), VIDEO_SOURCE_PIPEFORMAT, i);
-		if((pipe[i] = pipeline::lookup(pipename)) == NULL) {
+		if((pipe[i] = dpipe_lookup(pipename)) == NULL) {
 			ga_error("video source: cannot find pipeline '%s'\n", pipename);
 			exit(-1);
 		}
 	}
 	//
 	ga_error("video source thread started: tid=%ld\n", ga_gettid());
-#ifdef WIN32
-	QueryPerformanceFrequency(&freq);
-	QueryPerformanceCounter(&initialTv);
-#else
 	gettimeofday(&initialTv, NULL);
-#endif
+	lastTv = initialTv;
+	token = frame_interval;
 	while(vsource_started != 0) {
-		//
-		gettimeofday(&tv, NULL);
-		//if(pipe->client_count() <= 0) {
+		// encoder has not launched?
 		if(encoder_running() == 0) {
+#ifdef WIN32
+			Sleep(1);
+#else
+			usleep(1000);
+#endif
+			gettimeofday(&lastTv, NULL);
+			token = frame_interval;
+			continue;
+		}
+		// token bucket based capturing
+		gettimeofday(&captureTv, NULL);
+		token += tvdiff_us(&captureTv, &lastTv);
+		if(token > (frame_interval<<1)) {
+			token = (frame_interval<<1);
+		}
+		lastTv = captureTv;
+		//
+		if(token < frame_interval) {
 #ifdef WIN32
 			Sleep(1);
 #else
@@ -204,9 +229,10 @@ vsource_threadproc(void *arg) {
 #endif
 			continue;
 		}
+		token -= frame_interval;
 		// copy image 
-		data = pipe[0]->allocate_data();
-		frame = (vsource_frame_t*) data->ptr;
+		data = dpipe_get(pipe[0]);
+		frame = (vsource_frame_t*) data->pointer;
 #ifdef __APPLE__
 		frame->pixelformat = PIX_FMT_RGBA;
 #else
@@ -229,7 +255,6 @@ vsource_threadproc(void *arg) {
 		}
 		frame->linesize[0] = frame->realstride/*frame->stride*/;
 #ifdef WIN32
-		QueryPerformanceCounter(&captureTv);
 	#ifdef D3D_CAPTURE
 		ga_win32_D3D_capture((char*) frame->imgbuf, frame->imgbufsize, prect);
 	#elif defined DFM_CAPTURE
@@ -238,10 +263,8 @@ vsource_threadproc(void *arg) {
 		ga_win32_GDI_capture((char*) frame->imgbuf, frame->imgbufsize, prect);
 	#endif
 #elif defined __APPLE__
-		gettimeofday(&captureTv, NULL);
 		ga_osx_capture((char*) frame->imgbuf, frame->imgbufsize, prect);
 #else // X11
-		gettimeofday(&captureTv, NULL);
 		ga_xwin_capture((char*) frame->imgbuf, frame->imgbufsize, prect);
 #endif
 		// draw cursor
@@ -249,27 +272,32 @@ vsource_threadproc(void *arg) {
 		ga_win32_draw_system_cursor(frame);
 #endif
 		//gImgPts++;
-#ifdef WIN32
-		frame->imgpts = pcdiff_us(captureTv, initialTv, freq)/frame_interval;
-#else
 		frame->imgpts = tvdiff_us(&captureTv, &initialTv)/frame_interval;
+		frame->timestamp = captureTv;
+		// embed color code?
+#ifdef ENABLE_EMBED_COLORCODE
+		vsource_embed_colorcode_inc(frame);
 #endif
 		// duplicate from channel 0 to other channels
 		for(i = 1; i < SOURCES; i++) {
-			pooldata_t *dupdata;
+			dpipe_buffer_t *dupdata;
 			vsource_frame_t *dupframe;
-			dupdata = pipe[i]->allocate_data();
-			dupframe = (vsource_frame_t*) dupdata->ptr;
+			dupdata = dpipe_get(pipe[i]);
+			dupframe = (vsource_frame_t*) dupdata->pointer;
 			//
 			vsource_dup_frame(frame, dupframe);
 			//
-			pipe[i]->store_data(dupdata);
-			pipe[i]->notify_all();
+			dpipe_store(pipe[i], dupdata);
 		}
-		pipe[0]->store_data(data);
-		pipe[0]->notify_all();
-		//
-		ga_usleep(frame_interval, &tv);
+		dpipe_store(pipe[0], data);
+		// reconfigured?
+		if(vsource_reconfigured != 0) {
+			frame_interval = (int) (1000000.0 * vsource_framerate_d / vsource_framerate_n);
+			frame_interval++;
+			vsource_reconfigured = 0;
+			ga_error("video source: reconfigured - framerate=%d/%d (interval=%d)\n",
+				vsource_framerate_n, vsource_framerate_d, frame_interval);
+		}
 	}
 	//
 	ga_error("video source: thread terminated.\n");
@@ -323,6 +351,39 @@ vsource_stop(void *arg) {
 	return 0;
 }
 
+static int
+vsource_ioctl(int command, int argsize, void *arg) {
+	int ret = 0;
+	ga_ioctl_reconfigure_t *reconf = (ga_ioctl_reconfigure_t*) arg;
+	//
+	if(vsource_initialized == 0)
+		return GA_IOCTL_ERR_NOTINITIALIZED;
+	//
+	switch(command) {
+	case GA_IOCTL_RECONFIGURE:
+		if(argsize != sizeof(ga_ioctl_reconfigure_t))
+			return GA_IOCTL_ERR_INVALID_ARGUMENT;
+		if(reconf->framerate_n > 0 && reconf->framerate_d > 0) {
+			double framerate;
+			if(vsource_framerate_n == reconf->framerate_n
+			&& vsource_framerate_d == reconf->framerate_d)
+				break;
+			framerate = 1.0 * reconf->framerate_n / reconf->framerate_d;
+			if(framerate < 2 || framerate > 120) {
+				return GA_IOCTL_ERR_INVALID_ARGUMENT;
+			}
+			vsource_framerate_n = reconf->framerate_n;
+			vsource_framerate_d = reconf->framerate_d;
+			vsource_reconfigured = 1;
+		}
+		break;
+	default:
+		ret = GA_IOCTL_ERR_NOTSUPPORTED;
+		break;
+	}
+	return ret;
+}
+
 ga_module_t *
 module_load() {
 	static ga_module_t m;
@@ -333,6 +394,7 @@ module_load() {
 	m.start = vsource_start;
 	m.stop = vsource_stop;
 	m.deinit = vsource_deinit;
+	m.ioctl = vsource_ioctl;
 	return &m;
 }
 

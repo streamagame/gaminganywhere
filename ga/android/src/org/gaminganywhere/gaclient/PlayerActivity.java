@@ -25,6 +25,7 @@ import org.gaminganywhere.gaclient.util.GAController;
 import org.gaminganywhere.gaclient.util.GAControllerTransparent;
 import org.gaminganywhere.gaclient.util.GAControllerBasic;
 import org.gaminganywhere.gaclient.util.GAControllerDualPad;
+import org.gaminganywhere.gaclient.util.GAControllerEmpty;
 import org.gaminganywhere.gaclient.util.GAControllerLimbo;
 import org.gaminganywhere.gaclient.util.GAControllerN64;
 import org.gaminganywhere.gaclient.util.GAControllerNDS;
@@ -114,6 +115,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 			Intent intent = getIntent();
 			String s = intent.getStringExtra("profile");
 			int watchdogTimeout = intent.getIntExtra("watchdogTimeout", 3);
+			int dropLateVideoFrame = intent.getIntExtra("dropLateVFrame", -1);
 			//
 			if(s == null || s.equals("")) {
 				showToast("Player: No profile provided");
@@ -131,6 +133,13 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 			}
 			client.setBuiltinAudio(intent.getBooleanExtra("builtinAudio", true));
 			client.setBuiltinVideo(intent.getBooleanExtra("builtinVideo", true));
+			//
+			if(dropLateVideoFrame > 0) {
+				client.setDropLateVideoFrame(dropLateVideoFrame);
+			} else {
+				client.setDropLateVideoFrame(-1);
+			}
+			//
 			client.startRTSPClient();
 			if(watchdogTimeout > 0) {
 				client.watchdogSetTimeout(watchdogTimeout);
@@ -203,6 +212,8 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback, 
 				controller = new GAControllerTransparent(this);
 			} else if(cname.equals(GAControllerBasic.getName())) {
 				controller = new GAControllerBasic(this);
+			} else if(cname.equals(GAControllerEmpty.getName())) {
+				controller = new GAControllerEmpty(this);
 			} else if(cname.equals(GAControllerDualPad.getName())) {
 				controller = new GAControllerDualPad(this);
 			} else if(cname.equals(GAControllerLimbo.getName())){

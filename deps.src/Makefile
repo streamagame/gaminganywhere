@@ -1,6 +1,6 @@
 
 GADEPS		?= $(HOME)/myprog/gaminganywhere/deps.posix
-MACHINE		= $(shell uname -m)
+MACHINE		?= $(shell uname -m)
 SYSTEM		= $(shell uname -s)
 PACKAGES	= sdl2 sdl2_ttf yasm lame opus ogg vorbis theora vpx \
 		  x264 x265 xvid ffmpeg live555
@@ -8,8 +8,7 @@ OSX_CLANG_PATCH	= echo '*** Not on OS X: not applied ***'
 
 ifeq ($(SYSTEM),Darwin)
 VPX_EXTRA_CONFIG =
-HAS_BREW	= $(shell if which -s brew; then echo 1; else echo 0; fi)
-#HAS_BREW	= 0	# work without homebrew
+HAS_BREW	?= $(shell if which -s brew; then echo 1; else echo 0; fi)
 MACHINE		= $(shell uname -m)-apple-darwin
 OSX_CLANG_PATCH = perl -p -i -e "s/-falign-loops=16//g" configure; \
 		  perl -p -i -e "s/-fforce-addr//g"     configure
@@ -112,9 +111,12 @@ x264: yasm
 
 x265: yasm
 	$(TBZUNPACK) $(X265)
-	cd $(X265DIR)/build/linux; cmake -D CMAKE_INSTALL_PREFIX:PATH=$(GADEPS) ../../source/
-	$(MAKE) -C $(X265DIR)/build/linux
-	$(MAKE) -C $(X265DIR)/build/linux install
+	cd $(X265DIR)/build/linux; cmake \
+		-D CMAKE_INSTALL_PREFIX:PATH=$(GADEPS) \
+		-D CMAKE_CXX_FLAGS="-fPIC" -D CMAKE_C_FLAGS="-fPIC" \
+		../../source/
+	make -C $(X265DIR)/build/linux $(PARALLEL_MAKE)
+	make -C $(X265DIR)/build/linux install
 	rm -rf $(X265DIR)
 
 xvid:
@@ -148,6 +150,7 @@ live555:
 	mv -f $(LIVE555DIR)/config.macosx $(LIVE555DIR)/config.macosx.old
 	cat $(LIVE555DIR)/config.linux.old | sed -e 's,^COMPILE_OPTS.*$$,& -fPIC,' > $(LIVE555DIR)/config.linux
 	cat $(LIVE555DIR)/config.macosx.old | sed -e 's,^COMPILE_OPTS.*$$,& -fPIC,' > $(LIVE555DIR)/config.macosx
+	# need to apply the 4MB buffer patch?
 	cd $(LIVE555DIR); cat ../patches/live555-* | patch -p1 
 	#
 	cd $(LIVE555DIR); ./genMakefiles $(shell uname -s | tr A-Z a-z | sed -e 's,darwin,macosx,' -e 's,cygwin.*,cygwin,')

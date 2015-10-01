@@ -25,6 +25,7 @@ import java.util.List;
 import org.gaminganywhere.gaclient.util.GAControllerTransparent;
 import org.gaminganywhere.gaclient.util.GAControllerBasic;
 import org.gaminganywhere.gaclient.util.GAControllerDualPad;
+import org.gaminganywhere.gaclient.util.GAControllerEmpty;
 import org.gaminganywhere.gaclient.util.GAControllerLimbo;
 import org.gaminganywhere.gaclient.util.GAControllerN64;
 import org.gaminganywhere.gaclient.util.GAControllerPSP;
@@ -117,6 +118,8 @@ public class MainActivity extends Activity implements
 	private CheckBox cb_builtin_audio = null;
 	private CheckBox cb_builtin_video = null;
 	private CheckBox cb_portrait_mode = null;
+	private CheckBox cb_drop_late_vframe = null;
+	private SeekBar sb_drop_late_vframe = null;
 	private CheckBox cb_watchdog_timeout = null;
 	private SeekBar sb_watchdog_timeout = null;
 	private int [] watchdog_timeouts = {3, 5, 10, 20, 40, 60};
@@ -227,6 +230,7 @@ public class MainActivity extends Activity implements
 		intent.putExtra("builtinVideo", cb_builtin_video.isChecked());
 		intent.putExtra("portraitMode", cb_portrait_mode.isChecked());
 		intent.putExtra("controller", ctrl.get("name"));
+		intent.putExtra("dropLateVFrame", getDropLateVFrameDelay());
 		intent.putExtra("watchdogTimeout", getWatchdogTimeout());
 		startActivityForResult(intent, 0);
 	}
@@ -262,12 +266,22 @@ public class MainActivity extends Activity implements
 		cb_builtin_audio = (CheckBox) findViewById(R.id.cb_builtin_audio);
 		cb_builtin_video = (CheckBox) findViewById(R.id.cb_builtin_video);
 		cb_portrait_mode = (CheckBox) findViewById(R.id.cb_portrait_mode);
+		cb_drop_late_vframe = (CheckBox) findViewById(R.id.cb_drop_late_vframe);
+		sb_drop_late_vframe = (SeekBar) findViewById(R.id.sb_drop_late_frame);
 		cb_watchdog_timeout = (CheckBox) findViewById(R.id.cb_watchdog_timeout);
 		sb_watchdog_timeout = (SeekBar) findViewById(R.id.sb_watchdog_timeout);
 		//
 		cb_builtin_audio.setChecked(true);
 		cb_builtin_video.setChecked(true);
 		cb_portrait_mode.setChecked(false);
+		//
+		cb_drop_late_vframe.setChecked(false);
+		cb_drop_late_vframe.setOnCheckedChangeListener(this);
+		sb_drop_late_vframe.setEnabled(false);
+		sb_drop_late_vframe.setMax(1500);
+		sb_drop_late_vframe.setOnSeekBarChangeListener(this);
+		sb_drop_late_vframe.setProgress(100);
+		//
 		cb_watchdog_timeout.setChecked(true);
 		cb_watchdog_timeout.setOnCheckedChangeListener(this);
 		sb_watchdog_timeout.setEnabled(true);
@@ -289,6 +303,11 @@ public class MainActivity extends Activity implements
 			item = new HashMap<String,String>();
 			item.put("name", GAControllerBasic.getName());
 			item.put("desc", GAControllerBasic.getDescription());
+			list_control.add(item);
+			//
+			item = new HashMap<String,String>();
+			item.put("name", GAControllerEmpty.getName());
+			item.put("desc", GAControllerEmpty.getDescription());
 			list_control.add(item);
 			//
 			item = new HashMap<String,String>();
@@ -338,6 +357,12 @@ public class MainActivity extends Activity implements
 		if(cb_watchdog_timeout.isChecked() == false)
 			return -1;
 		return watchdog_timeouts[sb_watchdog_timeout.getProgress()];
+	}
+	
+	public int getDropLateVFrameDelay() {
+		if(cb_drop_late_vframe.isChecked() == false)
+			return -1;
+		return sb_drop_late_vframe.getProgress();
 	}
 	
 	@Override
@@ -420,16 +445,33 @@ public class MainActivity extends Activity implements
 				cb_watchdog_timeout.setText("Watchdog timeout: Disabled");
 			}
 			sb_watchdog_timeout.setEnabled(isChecked);
+		} else if(v == cb_drop_late_vframe) {
+			if(isChecked) {
+				cb_drop_late_vframe.setText(String.format("Drop late video frame: %sms",
+						sb_drop_late_vframe.getProgress()));
+			} else {
+				cb_drop_late_vframe.setText("Drop late video frame: Disabled");
+			}
+			sb_drop_late_vframe.setEnabled(isChecked);
 		}
 	}
 
 	@Override
 	public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-		int to = getWatchdogTimeout();
-		if(to > 0) {
-			cb_watchdog_timeout.setText(String.format("Watchdog timeout: %ss", to));
-		} else {
-			cb_watchdog_timeout.setText("Watchdog timeout: Disabled");
+		if(sb == sb_watchdog_timeout) {
+			int to = getWatchdogTimeout();
+			if(to > 0) {
+				cb_watchdog_timeout.setText(String.format("Watchdog timeout: %ss", to));
+			} else {
+				cb_watchdog_timeout.setText("Watchdog timeout: Disabled");
+			}
+		} else if(sb == sb_drop_late_vframe) {
+			int to = getDropLateVFrameDelay();
+			if(to > 0) {
+				cb_drop_late_vframe.setText(String.format("Drop late video frame: %sms", to));
+			} else {
+				cb_drop_late_vframe.setText(String.format("Drop late video frame: Disabled", to));
+			}
 		}
 		return;
 	}

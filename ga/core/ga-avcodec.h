@@ -16,8 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __XCAP_AVCODEC_H__
-#define __XCAP_AVCODEC_H__
+#ifndef __GA_AVCODEC_H__
+#define __GA_AVCODEC_H__
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,17 +31,13 @@ extern "C" {
 }
 #endif
 
-// Channel restriction to 32 is only defined in older libswresample
 #ifndef SWR_CH_MAX
-#define SWR_CH_MAX 32
+#define	SWR_CH_MAX	32
 #endif
 
 #include <map>
 #include <string>
 #include <vector>
-
-EXPORT struct SwsContext* ga_swscale_init(PixelFormat format, int inW, int inH, int outW, int outH);
-//	format = PIX_FMT_BGRA. PIX_FMT_RGBA, ...
 
 EXPORT AVFormatContext* ga_format_init(const char *filename);
 EXPORT AVFormatContext* ga_rtp_init(const char *url);

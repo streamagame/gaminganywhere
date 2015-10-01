@@ -16,6 +16,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+/**
+ * @file
+ * GamingAnywhere configuration file loader: header files
+ */
+
 #ifndef __GA_CONF_H__
 #define __GA_CONF_H__
 
@@ -29,6 +34,7 @@ EXPORT void ga_conf_clear();
 // operations with key/value pair
 EXPORT char * ga_conf_readv(const char *key, char *store, int slen);
 EXPORT int ga_conf_readint(const char *key);
+EXPORT double ga_conf_readdouble(const char *key);
 EXPORT int ga_conf_readbool(const char *key, int defval);
 EXPORT int ga_conf_boolval(const char *ptr, int defval);
 EXPORT int ga_conf_readints(const char *key, int *vals, int n);
@@ -42,6 +48,7 @@ EXPORT int ga_conf_mapsize(const char *mapname);
 EXPORT char * ga_conf_mapreadv(const char *mapname, const char *key, char *store, int slen);
 EXPORT int ga_conf_mapreadint(const char *mapname, const char *key);
 EXPORT int ga_conf_mapreadints(const char *mapname, const char *key, int *vals, int n);
+EXPORT double ga_conf_mapreaddouble(const char *mapname, const char *key);
 EXPORT int ga_conf_mapreadbool(const char *mapname, const char *key, int defval);
 EXPORT int ga_conf_mapwritev(const char *mapname, const char *key, const char *value);
 EXPORT void ga_conf_maperase(const char *mapname, const char *key);

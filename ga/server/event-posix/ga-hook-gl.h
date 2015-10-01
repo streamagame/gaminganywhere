@@ -32,16 +32,25 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#ifdef WIN32
+typedef void	(STDMETHODCALLTYPE *t_glFlush)(void);
+#else
 typedef void	(*t_glFlush)(void);
 #ifdef __linux__
 typedef void	(*t_glXSwapBuffers)(Display*,GLXDrawable);
+#endif
 #endif
 #ifdef __cplusplus
 }
 #endif
 
 extern t_glFlush	old_glFlush;
+
+#ifdef WIN32
+void WINAPI hook_glFlush();
+#else
 void hook_glFlush();
+#endif
 
 #ifdef __linux__
 extern t_glXSwapBuffers old_glXSwapBuffers;

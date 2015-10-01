@@ -1,44 +1,16 @@
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-
-# Debug files
-*.dSYM/
-
-# GamingAnywhere-specific
-bin/
-deps.posix/
-deps.android/
-ga/android/bin/
-ga/android/gen/
-ga/android/obj/
-ga/android/local.properties
-ga/client/ga-client
-ga/server/event-posix/ga-server-event-driven
-ga/server/periodic/ga-server-periodic
+# Dependencies need to be unzipped, but we don't commit them
+/bin
+/deps.win32
+/deps.win64
+/deps.posix*
+/deps.android-arm
+/deps.android-x86
+/do-release.sh
+/EXCLUDE
+/ga/core/deprecated
+/ga/doxygen
+/prebuilt.*
+/profile
+/release
+/sync.sh
+/tmp

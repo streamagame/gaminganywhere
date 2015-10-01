@@ -1,14 +1,12 @@
 
 include ../Makefile.def
 
-CFLAGS	= -O2 -fPIC -g -Wall -I$(GADEPS)/include $(EXTRACFLAGS) -DPIPELINE_FILTER \
-	  -I../core $(AVCCF) $(L5CF) $(SDLCF)
-#	-D__STDC_CONSTANT_MACROS
-LDFLAGS	= -L../core -lga $(AVCLD) $(SDLLD) $(L5LD) -Wl,-rpath,\$$ORIGIN
+CFLAGS	+= -I../core $(AVCCF) $(L5CF) $(SDLCF)
+LDFLAGS	= $(EXTRALDFLAGS) -L../core -lga $(AVCLD) $(SDLLD) $(L5LD) -Wl,-rpath,\$$ORIGIN
 
 ifeq ($(OS), Linux)
 CFLAGS	+= $(X11CF)
-LDFLAGS	+= $(X11LD)
+LDFLAGS	+= $(X11LD) -lrt
 endif
 
 ifeq ($(OS), Darwin)
@@ -22,7 +20,7 @@ all: $(TARGET)
 .cpp.o:
 	$(CXX) -c -g $(CFLAGS) $<
 
-ga-client: ga-client.o rtspclient.o ctrl-sdl.o minih264.o minivp8.o
+ga-client: ga-client.o rtspclient.o ctrl-sdl.o minih264.o minivp8.o qosreport.o
 	$(CXX) -o $@ $^ $(LDFLAGS)
 
 install: $(TARGET)

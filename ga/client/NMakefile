@@ -13,15 +13,15 @@ all: $(TARGET)
 .cpp.obj:
 	$(CXX) /c -I..\core /MD $(CXX_FLAGS) $<
 
-ga-client.exe: ga-client.obj rtspclient.obj ctrl-sdl.obj minih264.obj minivp8.obj
+ga-client.exe: ga-client.obj rtspclient.obj ctrl-sdl.obj minih264.obj minivp8.obj qosreport.obj
 	$(CXX) /MD $** $(LIBS) /link $(LIB_PATH) /libpath:..\core /subsystem:console /opt:noref
 
 #	link /out:$@ $(LDFLAGS) $**
 
 install:
-	-mkdir ..\..\bin
-	copy /y $(TARGET) ..\..\bin
-	copy /y *.ttf ..\..\bin
+	-mkdir ..\..\bin.$(GA_WINSYS)
+	copy /y $(TARGET) ..\..\bin.$(GA_WINSYS)
+	copy /y *.ttf ..\..\bin.$(GA_WINSYS)
 
 clean:
 	-del /f /q $(TARGET) *.obj *~

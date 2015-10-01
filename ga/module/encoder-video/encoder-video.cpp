@@ -19,8 +19,7 @@
 #include <stdio.h>
 
 #include "vsource.h"
-#include "server.h"
-#include "rtspserver.h"
+#include "rtspconf.h"
 #include "encoder-common.h"
 
 #include "ga-common.h"
@@ -28,7 +27,7 @@
 #include "ga-conf.h"
 #include "ga-module.h"
 
-#include "pipeline.h"
+#include "dpipe.h"
 
 //// Prevent use of GLOBAL_HEADER to pass parameters, disabled by default
 //#define STANDALONE_SDP	1
@@ -53,6 +52,8 @@ static char *_sps[VIDEO_SOURCE_CHANNEL_MAX];
 static int _spslen[VIDEO_SOURCE_CHANNEL_MAX];
 static char *_pps[VIDEO_SOURCE_CHANNEL_MAX];
 static int _ppslen[VIDEO_SOURCE_CHANNEL_MAX];
+static char *_vps[VIDEO_SOURCE_CHANNEL_MAX];
+static int _vpslen[VIDEO_SOURCE_CHANNEL_MAX];
 
 static int
 vencoder_deinit(void *arg) {
@@ -98,20 +99,19 @@ vencoder_init(void *arg) {
 	for(iid = 0; iid < video_source_channels(); iid++) {
 		char pipename[64];
 		int outputW, outputH;
-		pipeline *pipe;
-		AVCodecContext *avc = NULL;
+		dpipe_t *pipe;
 		//
 		_sps[iid] = _pps[iid] = NULL;
 		_spslen[iid] = _ppslen[iid] = 0;
 		snprintf(pipename, sizeof(pipename), pipefmt, iid);
 		outputW = video_source_out_width(iid);
 		outputH = video_source_out_height(iid);
-		if((pipe = pipeline::lookup(pipename)) == NULL) {
+		if((pipe = dpipe_lookup(pipename)) == NULL) {
 			ga_error("video encoder: pipe %s is not found\n", pipename);
 			goto init_failed;
 		}
 		ga_error("video encoder: video source #%d from '%s' (%dx%d).\n",
-			iid, pipe->name(), outputW, outputH, iid);
+			iid, pipe->name, outputW, outputH, iid);
 		vencoder[iid] = ga_avcodec_vencoder_init(NULL,
 				rtspconf->video_encoder_codec,
 				outputW, outputH,
@@ -157,10 +157,10 @@ static void *
 vencoder_threadproc(void *arg) {
 	// arg is pointer to source pipename
 	int iid, outputW, outputH;
-	pooldata_t *data = NULL;
 	vsource_frame_t *frame = NULL;
 	char *pipename = (char*) arg;
-	pipeline *pipe = pipeline::lookup(pipename);
+	dpipe_t *pipe = dpipe_lookup(pipename);
+	dpipe_buffer_t *data = NULL;
 	AVCodecContext *encoder = NULL;
 	//
 	AVFrame *pic_in = NULL;
@@ -181,11 +181,13 @@ vencoder_threadproc(void *arg) {
 	//
 	rtspconf = rtspconf_global();
 	// init variables
-	iid = ((vsource_t*) pipe->get_privdata())->channel;
+	iid = pipe->channel_id;
 	encoder = vencoder[iid];
 	//
 	outputW = video_source_out_width(iid);
 	outputH = video_source_out_height(iid);
+	//
+	encoder_pts_clear(iid);
 	//
 	nalbuf_size = 100000+12 * outputW * outputH;
 	if(ga_malloc(nalbuf_size, (void**) &nalbuf, &nalign) < 0) {
@@ -194,7 +196,7 @@ vencoder_threadproc(void *arg) {
 	}
 	nalbuf_a = nalbuf + nalign;
 	//
-	if((pic_in = avcodec_alloc_frame()) == NULL) {
+	if((pic_in = av_frame_alloc()) == NULL) {
 		ga_error("video encoder: picture allocation failed, terminated.\n");
 		goto video_quit;
 	}
@@ -212,33 +214,21 @@ vencoder_threadproc(void *arg) {
 		outputW, outputH, rtspconf->video_fps,
 		nalbuf_size, pic_in_size);
 	//
-	pipe->client_register(ga_gettid(), &cond);
-	//
 	while(vencoder_started != 0 && encoder_running() > 0) {
 		AVPacket pkt;
 		int got_packet = 0;
 		// wait for notification
-		data = pipe->load_data();
+		struct timeval tv;
+		struct timespec to;
+		gettimeofday(&tv, NULL);
+		to.tv_sec = tv.tv_sec+1;
+		to.tv_nsec = tv.tv_usec * 1000;
+		data = dpipe_load(pipe, &to);
 		if(data == NULL) {
-			int err;
-			struct timeval tv;
-			struct timespec to;
-			gettimeofday(&tv, NULL);
-			to.tv_sec = tv.tv_sec+1;
-			to.tv_nsec = tv.tv_usec * 1000;
-			//
-			if((err = pipe->timedwait(&cond, &condMutex, &to)) != 0) {
-				ga_error("viedo encoder: image source timed out.\n");
-				continue;
-			}
-			data = pipe->load_data();
-			if(data == NULL) {
-				ga_error("viedo encoder: unexpected NULL frame received (from '%s', data=%d, buf=%d).\n",
-					pipe->name(), pipe->data_count(), pipe->buf_count());
-				continue;
-			}
+			ga_error("viedo encoder: image source timed out.\n");
+			continue;
 		}
-		frame = (vsource_frame_t*) data->ptr;
+		frame = (vsource_frame_t*) data->pointer;
 		// handle pts
 		if(basePts == -1LL) {
 			basePts = frame->imgpts;
@@ -256,10 +246,11 @@ vencoder_threadproc(void *arg) {
 			ga_error("video encoder: YUV mode failed - mismatched linesize(s) (src:%d,%d,%d; dst:%d,%d,%d)\n",
 				frame->linesize[0], frame->linesize[1], frame->linesize[2],
 				pic_in->linesize[0], pic_in->linesize[1], pic_in->linesize[2]);
-			pipe->release_data(data);
+			dpipe_put(pipe, data);
 			goto video_quit;
 		}
-		pipe->release_data(data);
+		tv = frame->timestamp;
+		dpipe_put(pipe, data);
 		// pts must be monotonically increasing
 		if(newpts > pts) {
 			pts = newpts;
@@ -267,6 +258,7 @@ vencoder_threadproc(void *arg) {
 			pts++;
 		}
 		// encode
+		encoder_pts_put(iid, pts, &tv);
 		pic_in->pts = pts;
 		av_init_packet(&pkt);
 		pkt.data = nalbuf_a;
@@ -280,10 +272,32 @@ vencoder_threadproc(void *arg) {
 				pkt.pts = pts;
 			}
 			pkt.stream_index = 0;
+#if 0			// XXX: dump naltype
+			do {
+				int codelen;
+				unsigned char *ptr;
+				fprintf(stderr, "[XXX-naldump]");
+				for(	ptr = ga_find_startcode(pkt.data, pkt.data+pkt.size, &codelen);
+					ptr != NULL;
+					ptr = ga_find_startcode(ptr+codelen, pkt.data+pkt.size, &codelen)) {
+					//
+					fprintf(stderr, " (+%d|%d)-%02x", ptr-pkt.data, codelen, ptr[codelen] & 0x1f);
+				}
+				fprintf(stderr, "\n");
+			} while(0);
+#endif
+			//
+			if(pkt.pts != AV_NOPTS_VALUE) {
+				if(encoder_ptv_get(iid, pkt.pts, &tv, 0) == NULL) {
+					gettimeofday(&tv, NULL);
+				}
+			} else {
+				gettimeofday(&tv, NULL);
+			}
 			// send the packet
-			if(encoder_send_packet_all("video-encoder",
+			if(encoder_send_packet("video-encoder",
 				iid/*rtspconf->video_id*/, &pkt,
-				pkt.pts, NULL) < 0) {
+				pkt.pts, &tv) < 0) {
 				goto video_quit;
 			}
 			// free unused side-data
@@ -304,7 +318,6 @@ vencoder_threadproc(void *arg) {
 	//
 video_quit:
 	if(pipe) {
-		pipe->client_unregister(ga_gettid());
 		pipe = NULL;
 	}
 	//
@@ -354,9 +367,11 @@ vencoder_stop(void *arg) {
 
 static void *
 vencoder_raw(void *arg, int *size) {
-#if defined __x86_64__ // __APPLE__
+#if defined __APPLE__
 	int64_t in = (int64_t) arg;
 	int iid = (int) (in & 0xffffffffLL);
+#elif defined __x86_64__
+	int iid = (long long) arg;
 #else
 	int iid = (int) arg;
 #endif
@@ -367,7 +382,7 @@ vencoder_raw(void *arg, int *size) {
 	return vencoder[iid];
 }
 
-/* find startcode: 00 00 00 01 - a simplified version */
+/* find startcode: XXX: only 00 00 00 01 - a simplified version */
 static unsigned char *
 find_startcode(unsigned char *data, unsigned char *end) {
 	unsigned char *r;
@@ -382,124 +397,152 @@ find_startcode(unsigned char *data, unsigned char *end) {
 }
 
 static int
-h264_get_sps_pps(int channelId, unsigned char *data, int datalen) {
+h264or5_get_vparam(int type, int channelId, unsigned char *data, int datalen) {
 	int ret = -1;
 	unsigned char *r;
-	unsigned char *sps = NULL, *pps = NULL;
-	int spslen = 0, ppslen = 0;
+	unsigned char *sps = NULL, *pps = NULL, *vps = NULL;
+	int spslen = 0, ppslen = 0, vpslen = 0;
 	if(_sps[channelId] != NULL)
 		return 0;
 	r = find_startcode(data, data + datalen);
 	while(r < data + datalen) {
 		unsigned char nal_type;
 		unsigned char *r1;
+#if 0
 		if(sps != NULL && pps != NULL)
 			break;
+#endif
 		while(0 == (*r++))
 			;
-		nal_type = *r & 0x1f;
 		r1 = find_startcode(r, data + datalen);
-		if(nal_type == 7) {
-			// SPS
-			sps = r;
-			spslen = r1 - r;
-		} else if(nal_type == 8) {
-			// PPS
-			pps = r;
-			ppslen = r1 - r;
+		if(type == 265) {
+			nal_type = ((*r)>>1) & 0x3f;
+			if(nal_type == 32) {		// VPS
+				vps = r;
+				vpslen = r1 - r;
+			} else if(nal_type == 33) {	// SPS
+				sps = r;
+				spslen = r1 - r;
+			} else if(nal_type == 34) {	// PPS
+				pps = r;
+				ppslen = r1 - r;
+			}
+		} else {
+			// assume default is 264
+			nal_type = *r & 0x1f;
+			if(nal_type == 7) {		// SPS
+				sps = r;
+				spslen = r1 - r;
+			} else if(nal_type == 8) {	// PPS
+				pps = r;
+				ppslen = r1 - r;
+			}
 		}
 		r = r1;
 	}
 	if(sps != NULL && pps != NULL) {
 		// alloc and copy SPS
 		if((_sps[channelId] = (char*) malloc(spslen)) == NULL)
-			return -1;
+			goto error_get_h264or5_vparam;
 		_spslen[channelId] = spslen;
 		bcopy(sps, _sps[channelId], spslen);
 		// alloc and copy PPS
 		if((_pps[channelId] = (char*) malloc(ppslen)) == NULL) {
-			free(_sps[channelId]);
-			_sps[channelId] = NULL;
-			return -1;
+			goto error_get_h264or5_vparam;
 		}
 		_ppslen[channelId] = ppslen;
 		bcopy(pps, _pps[channelId], ppslen);
-		ga_error("video encoder: found sps@%d(%d); pps@%d(%d)\n",
-			sps-data, _spslen[channelId],
-			pps-data, _ppslen[channelId]);
+		// alloc and copy VPS
+		if(vps != NULL) {
+			if((_vps[channelId] = (char*) malloc(vpslen)) == NULL) {
+				goto error_get_h264or5_vparam;
+			}
+			_vpslen[channelId] = vpslen;
+			bcopy(vps, _vps[channelId], vpslen);
+		}
+		//
+		if(type == 265) {
+			if(vps == NULL)
+				goto error_get_h264or5_vparam;
+			ga_error("video encoder: h.265/found sps@%d(%d); pps@%d(%d); vps@%d(%d)\n",
+				sps-data, _spslen[channelId],
+				pps-data, _ppslen[channelId],
+				vps-data, _vpslen[channelId]);
+		} else {
+			ga_error("video encoder: h.264/found sps@%d(%d); pps@%d(%d)\n",
+				sps-data, _spslen[channelId],
+				pps-data, _ppslen[channelId]);
+		}
 		//
 		ret = 0;
 	}
 	return ret;
+error_get_h264or5_vparam:
+	if(_sps[channelId])	free(_sps[channelId]);
+	if(_pps[channelId])	free(_pps[channelId]);
+	if(_vps[channelId])	free(_vps[channelId]);
+	_sps[channelId]    = _pps[channelId]    = _vps[channelId]    = NULL;
+	_spslen[channelId] = _ppslen[channelId] = _vpslen[channelId] = 0;
+	return -1;
 }
 
-static void *
-vencoder_opt1(void *arg, int *size) {
+static AVCodecContext *
+vencoder_opt_get_encoder(int cid) {
 	AVCodecContext *ve = NULL;
-#if defined __x86_64__ // __APPLE__
-	int64_t in = (int64_t) arg;
-	int iid = (int) (in & 0xffffffffLL);
-#else
-	int iid = (int) arg;
-#endif
-	void *ret = NULL;
 	if(vencoder_initialized == 0)
 		return NULL;
 #ifdef STANDALONE_SDP
-	ve = vencoder_sdp[iid] ? vencoder_sdp[iid] : vencoder[iid];
+	ve = vencoder_sdp[cid] ? vencoder_sdp[cid] : vencoder[cid];
 #else
-	ve = vencoder[iid];
+	ve = vencoder[cid];
 #endif
-	if(ve == NULL)
-		return NULL;
-	if(ve->extradata_size <= 0)
-		return NULL;
-	switch(ve->codec_id) {
-	case AV_CODEC_ID_H264:
-		if(h264_get_sps_pps(iid, ve->extradata, ve->extradata_size) < 0)
-			return NULL;
-		*size = _spslen[iid];
-		return _sps[iid];
-		break;
-	default:
-		*size = ve->extradata_size;
-		ret = ve->extradata;
-	}
-	return ret;
+	return ve;
 }
 
-static void *
-vencoder_opt2(void *arg, int *size) {
+static int
+vencoder_ioctl(int command, int argsize, void *arg) {
+	int ret = 0;
+	ga_ioctl_buffer_t *buf = (ga_ioctl_buffer_t*) arg;
 	AVCodecContext *ve = NULL;
-#if defined __x86_64__ // __APPLE__
-	int64_t in = (int64_t) arg;
-	int iid = (int) (in & 0xffffffffLL);
-#else
-	int iid = (int) arg;
-#endif
-	void *ret = NULL;
-	if(vencoder_initialized == 0)
-		return NULL;
-#ifdef STANDALONE_SDP
-	ve = vencoder_sdp[iid] ? vencoder_sdp[iid] : vencoder[iid];
-#else
-	ve = vencoder[iid];
-#endif
-	if(ve == NULL)
-		return NULL;
-	if(ve->extradata_size <= 0)
-		return NULL;
-	switch(ve->codec_id) {
-	case AV_CODEC_ID_H264:
-		// return PPS
-		if(h264_get_sps_pps(iid, ve->extradata, ve->extradata_size) < 0)
-			return NULL;
-		*size = _ppslen[iid];
-		return _pps[iid];
+	//
+	switch(command) {
+	case GA_IOCTL_GETSPS:
+	case GA_IOCTL_GETPPS:
+	case GA_IOCTL_GETVPS:
+		if((ve = vencoder_opt_get_encoder(buf->id)) == NULL)
+			return GA_IOCTL_ERR_BADID;
+		if(argsize != sizeof(ga_ioctl_buffer_t))
+			return GA_IOCTL_ERR_INVALID_ARGUMENT;
+		if(ve->extradata_size <= 0)
+			return GA_IOCTL_ERR_NOTFOUND;
+		if(ve->codec_id != AV_CODEC_ID_H264 && ve->codec_id != AV_CODEC_ID_H265)
+			return GA_IOCTL_ERR_NOTSUPPORTED;
+		if(ve->codec_id == AV_CODEC_ID_H264 && command == GA_IOCTL_GETVPS)
+			return GA_IOCTL_ERR_NOTSUPPORTED;
+		if(h264or5_get_vparam(ve->codec_id == AV_CODEC_ID_H264 ? 264 : 265,
+				buf->id, ve->extradata, ve->extradata_size) < 0) {
+			return GA_IOCTL_ERR_NOTFOUND;
+		}
+		if(command == GA_IOCTL_GETSPS) {
+			if(buf->size < _spslen[buf->id])
+				return GA_IOCTL_ERR_BUFFERSIZE;
+			buf->size = _spslen[buf->id];
+			bcopy(_sps[buf->id], buf->ptr, buf->size);
+		} else if(command == GA_IOCTL_GETPPS) {
+			if(buf->size < _ppslen[buf->id])
+				return GA_IOCTL_ERR_BUFFERSIZE;
+			buf->size = _ppslen[buf->id];
+			bcopy(_pps[buf->id], buf->ptr, buf->size);
+		} else if(command == GA_IOCTL_GETVPS) {
+			if(buf->size < _vpslen[buf->id])
+				return GA_IOCTL_ERR_BUFFERSIZE;
+			buf->size = _vpslen[buf->id];
+			bcopy(_vps[buf->id], buf->ptr, buf->size);
+		}
 		break;
 	default:
-		*size = ve->extradata_size;
-		ret = ve->extradata;
+		ret = GA_IOCTL_ERR_NOTSUPPORTED;
+		break;
 	}
 	return ret;
 }
@@ -507,7 +550,7 @@ vencoder_opt2(void *arg, int *size) {
 ga_module_t *
 module_load() {
 	static ga_module_t m;
-	struct RTSPConf *rtspconf = rtspconf_global();
+	//struct RTSPConf *rtspconf = rtspconf_global();
 	char mime[64];
 	//
 	bzero(&m, sizeof(m));
@@ -523,8 +566,7 @@ module_load() {
 	m.deinit = vencoder_deinit;
 	//
 	m.raw = vencoder_raw;
-	m.option1 = vencoder_opt1;
-	m.option2 = vencoder_opt2;
+	m.ioctl = vencoder_ioctl;
 	return &m;
 }
 

@@ -29,6 +29,8 @@
 #include <GLES/glext.h>
 
 #include "ga-common.h"
+#include "ga-conf.h"
+#include "vconverter.h"
 #include "libgaclient.h"
 #include "rtspconf.h"
 #include "rtspclient.h"
@@ -38,6 +40,7 @@
 #include <map>
 using namespace std;
 
+//#define PRINT_LATENCY	1
 #define	POOLSIZE	16
 
 // JNI config
@@ -69,6 +72,11 @@ static pthread_t ctrlthread;
 static pthread_t rtspthread;
 
 static map<pthread_t,JNIEnv*> threadEnv;
+
+#ifdef PRINT_LATENCY
+static int ptv0locked = 0;
+static struct timeval ptv0;
+#endif
 
 JNIEnv *
 attachThread(JNIEnv *jnienv) {
@@ -178,6 +186,12 @@ goBack(JNIEnv *jnienv, jint exitCode) {
 void
 requestRender(JNIEnv *jnienv) {
 	JNIEnv *env;
+#ifdef PRINT_LATENCY
+	if(ptv0locked == 0) {
+		ptv0locked = 1;
+		gettimeofday(&ptv0, NULL);
+	}
+#endif
 	if((env = attachThread(jnienv)) == NULL)
 		return;
 	env->CallVoidMethod(g_obj, g_mid_requestRender);
@@ -328,8 +342,8 @@ gl_resize(int width, int height) {
 	//
 	glGenTextures(1, &img_texture);
 	glBindTexture(GL_TEXTURE_2D, img_texture);
-	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST/*GL_LINEAR*/);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST/*GL_LINEAR*/);
 	glShadeModel(GL_FLAT);
 	glColor4x(0x10000, 0x10000, 0x10000, 0x10000);
 	int rect[4] = {0, img_height, img_width, -img_height};
@@ -351,8 +365,11 @@ gl_resize(int width, int height) {
 int
 gl_render() {
 	extern int image_rendered;
-	pooldata_t *data = NULL;
+	dpipe_buffer_t *data = NULL;
 	AVPicture *vframe = NULL;
+#ifdef PRINT_LATENCY
+	struct timeval ptv1;
+#endif
 	//
 	//ga_log("XXX: img=%dx%d; pipeline=0x%p\n",
 	//	img_width, img_height, rtspThreadParam.pipe[0]);
@@ -361,13 +378,13 @@ gl_render() {
 	if(rtspThreadParam.pipe[0] == NULL)
 		return -1;
 	//
-	if((data = rtspThreadParam.pipe[0]->load_data()) == NULL)
+	if((data = dpipe_load_nowait(rtspThreadParam.pipe[0])) == NULL)
 		return -1;
-	vframe = (AVPicture*) data->ptr;
+	vframe = (AVPicture*) data->pointer;
 	//
 	//glClear(GL_COLOR_BUFFER_BIT);
-	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST/*GL_LINEAR*/);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST/*GL_LINEAR*/);
 	int rect[4] = {0, img_height, img_width, -img_height};
 	glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_CROP_RECT_OES, rect);
 	glTexImage2D(GL_TEXTURE_2D,		/* target */
@@ -389,39 +406,48 @@ gl_render() {
 			GL_UNSIGNED_SHORT_5_6_5, /* type */
 			vframe->data[0]);	/* pixels */
 	glDrawTexiOES(0, 0, 0, gl_width, gl_height);
-	rtspThreadParam.pipe[0]->release_data(data);
+	dpipe_put(rtspThreadParam.pipe[0], data);
 	image_rendered = 1;
+#ifdef PRINT_LATENCY
+	if(ptv0locked != 0) {
+		gettimeofday(&ptv1, NULL);
+		ga_aggregated_print(0x8005, 619, tvdiff_us(&ptv1, &ptv0));
+		ptv0locked = 0;
+	}
+#endif
 	return 0;
 }
 
 int
 create_overlay(int ch, int w, int h, PixelFormat format) {
 	struct SwsContext *swsctx = NULL;
-	pipeline *pipe = NULL;
-	pooldata_t *data = NULL;
+	dpipe_t *pipe = NULL;
+	dpipe_buffer_t *data = NULL;
+	char pipename[64];
+#ifdef PRINT_LATENCY
+	ptv0locked = 0;
+#endif
 	//
 	setScreenDimension(rtspThreadParam.jnienv, w, h);
 	// XXX: assume surfaceMutex[ch] locked
-	if((swsctx = sws_getContext(w, h, format, w, h, PIX_FMT_RGB565,
-			SWS_FAST_BILINEAR, NULL, NULL, NULL)) == NULL) {
+	//if((swsctx = sws_getContext(w, h, format, w, h, PIX_FMT_RGB565,
+	//		SWS_BICUBIC, NULL, NULL, NULL)) == NULL) {
+	if((swsctx = create_frame_converter(w, h, format, w, h, PIX_FMT_RGB565)) == NULL) {
 		rtsperror("ga-client: cannot create swsscale context.\n");
 		rtspThreadParam.quitLive555 = 1;
 		return -1;
 	}
 	// pipeline
-	if((pipe = new pipeline()) == NULL) {
+	snprintf(pipename, sizeof(pipename), "channel-%d", ch);
+	pipe = dpipe_create(ch, pipename, POOLSIZE, sizeof(AVPicture));
+	if(pipe == NULL) {
 		rtsperror("ga-client: cannot create pipeline.\n");
 		rtspThreadParam.quitLive555 = 1;
 		return -1;
 	}
-	if((data = pipe->datapool_init(POOLSIZE, sizeof(AVPicture))) == NULL) {
-		rtsperror("ga-client: cannot allocate data pool.\n");
-		rtspThreadParam.quitLive555 = 1;
-		return -1;
-	}
-	for(; data != NULL; data = data->next) {
-		bzero(data->ptr, sizeof(AVPicture));
-		if(avpicture_alloc((AVPicture*) data->ptr, PIX_FMT_RGB565, w, h) != 0) {
+	for(data = pipe->in; data != NULL; data = data->next) {
+		bzero(data->pointer, sizeof(AVPicture));
+		if(avpicture_alloc((AVPicture*) data->pointer, PIX_FMT_RGB565, w, h) != 0) {
 			rtsperror("ga-client: per frame initialization failed.\n");
 			rtspThreadParam.quitLive555 = 1;
 			return -1;
@@ -689,6 +715,18 @@ Java_org_gaminganywhere_gaclient_GAClient_setAudioCodec(
 #if 0
 	env->ReleaseStringUTFChars(codecname, scodec);
 #endif
+	return;
+}
+
+//public native void setDropLateVideoFrame(int ms);
+JNIEXPORT void JNICALL
+Java_org_gaminganywhere_gaclient_GAClient_setDropLateVideoFrame(JNIEnv *env, jobject thisObj, jint ms) {
+	char value[16] = "-1";
+	if(ms > 0) {
+		snprintf(value, sizeof(value), "%d", ms * 1000);
+	}
+	ga_conf_writev("max-tolerable-video-delay", value);
+	ga_error("libgaclient: configured max-tolerable-video-delay = %s\n", value);
 	return;
 }
 
