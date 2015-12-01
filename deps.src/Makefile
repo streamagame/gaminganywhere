@@ -2,7 +2,8 @@
 GADEPS		?= $(HOME)/myprog/gaminganywhere/deps.posix
 MACHINE		?= $(shell uname -m)
 SYSTEM		= $(shell uname -s)
-PACKAGES	= sdl2 sdl2_ttf yasm lame opus ogg vorbis theora vpx \
+# vpx removed
+PACKAGES	= sdl2 sdl2_ttf yasm lame opus ogg vorbis theora \
 		  x264 x265 xvid ffmpeg live555
 OSX_CLANG_PATCH	= echo '*** Not on OS X: not applied ***'
 
@@ -126,19 +127,21 @@ xvid:
 	$(MAKE) -C $(XVIDDIR)/build/generic install
 	rm -rf $(XVIDDIR)
 
-ffmpeg: lame vorbis theora vpx x264 x265 opus xvid
+# vpx removed
+ffmpeg: lame vorbis theora x264 x265 opus xvid
 	$(TBZUNPACK) $(FFMPEG)
 	cd $(FFMPEGDIR); ./configure --prefix=$(GADEPS) \
 		--enable-shared --enable-pic \
 		--enable-libmp3lame \
 		--enable-libtheora --enable-libvorbis \
-		--enable-libx264 --enable-libvpx \
+		--enable-libx264 \
 		--enable-libx265 \
 		--enable-libopus \
 		--enable-libxvid \
 		--enable-gpl --enable-nonfree --disable-outdev=sdl \
 		--extra-cflags=-I$(GADEPS)/include \
 		--extra-ldflags=-L$(GADEPS)/lib
+# removed: --enable-libvpx
 	$(MAKE) -C $(FFMPEGDIR)
 	$(MAKE) -C $(FFMPEGDIR) install
 	rm -rf $(FFMPEGDIR)
