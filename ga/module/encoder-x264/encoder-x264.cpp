@@ -29,6 +29,13 @@
 
 #include "dpipe.h"
 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <string.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +48,10 @@ static struct RTSPConf *rtspconf = NULL;
 
 static int vencoder_initialized = 0;
 static int vencoder_started = 0;
+static int vencoder_reconfigure_control_server_started = 0;
+static pthread_t vencoder_reconfigure_control_server_tid;
+const int VENCODER_RECONFIGURE_CONTROL_SERVER_PORT = 42424;
+const int VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN = 64;
 static pthread_t vencoder_tid[VIDEO_SOURCE_CHANNEL_MAX];
 static pthread_mutex_t vencoder_reconf_mutex[VIDEO_SOURCE_CHANNEL_MAX];
 static ga_ioctl_reconfigure_t vencoder_reconf[VIDEO_SOURCE_CHANNEL_MAX];
@@ -67,6 +78,12 @@ vencoder_deinit(void *arg) {
 		fsaveenc = NULL;
 	}
 #endif
+
+	// TODO: Stop control server
+	vencoder_reconfigure_control_server_started = 0;
+	void *ignored;
+	pthread_join(vencoder_reconfigure_control_server_tid, &ignored);
+
 	for(iid = 0; iid < video_source_channels(); iid++) {
 		if(_sps[iid] != NULL)
 			free(_sps[iid]);
@@ -93,6 +110,9 @@ ga_x264_param_parse_bit(x264_param_t *params, const char *name, const char *bitv
 	snprintf(kbit, sizeof(kbit), "%d", v / 1000);
 	return x264_param_parse(params, name, kbit);
 }
+
+static void *
+vencoder_reconfigure_control_server_threadproc(void *arg);
 
 static int
 vencoder_init(void *arg) {
@@ -227,6 +247,20 @@ vencoder_init(void *arg) {
 #ifdef SAVEENC
 	fsaveenc = fopen(SAVEENC, "wb");
 #endif
+
+	ga_error("video encoder: Starting reconfigure control server ...\n");
+
+	// TODO:
+	if(pthread_create(
+			&vencoder_reconfigure_control_server_tid,
+			NULL,
+			vencoder_reconfigure_control_server_threadproc,
+			NULL) != 0) {
+		vencoder_reconfigure_control_server_started = 0;
+		ga_error("video encoder: create reconfigure control server thread failed.\n");
+		return -1;
+	}
+
 	vencoder_initialized = 1;
 	ga_error("video encoder: initialized.\n");
 	return 0;
@@ -244,10 +278,12 @@ vencoder_reconfigure(int iid) {
 	//
 	pthread_mutex_lock(&vencoder_reconf_mutex[iid]);
 	if(vencoder_reconf[iid].id >= 0) {
+		ga_error("video encoder: reconfiguring x264 parameters for session %d\n", iid);
 		int doit = 0;
 		x264_encoder_parameters(encoder, &params);
 		//
 		if(reconf->crf > 0) {
+			params.rc.i_rc_method = X264_RC_CRF;
 			params.rc.f_rf_constant = 1.0 * reconf->crf;
 			doit++;
 		}
@@ -277,7 +313,8 @@ vencoder_reconfigure(int iid) {
 						reconf->bufsize);
 				ret = -1;
 			} else {
-				ga_error("video encoder: reconfigured. crf=%.2f; framerate=%d/%d; bitrate=%d/%dKbps; bufsize=%dKbit.\n",
+				ga_error("video encoder: reconfigured. rc_method=%d; crf=%.2f; cframerate=%d/%d; bitrate=%d/%dKbps; bufsize=%dKbit.\n",
+						params.rc.i_rc_method,
 						params.rc.f_rf_constant,
 						params.i_fps_num, params.i_fps_den,
 						params.rc.i_bitrate, params.rc.i_vbv_max_bitrate,
@@ -288,6 +325,193 @@ vencoder_reconfigure(int iid) {
 	}
 	pthread_mutex_unlock(&vencoder_reconf_mutex[iid]);
 	return ret;
+}
+
+int open_socket() {
+	int sock = -1;
+	struct sockaddr_in address;
+	const int y = 1;
+
+	if((sock = socket(AF_INET, SOCK_STREAM, 0)) <= 0) {
+		ga_error("video encoder: Failed to open socket for reconfigure control server.\n");
+		return sock;
+	}
+
+	setsockopt(sock, SOL_SOCKET,
+		SO_REUSEADDR, &y, sizeof(int));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = INADDR_ANY;
+	address.sin_port = htons (VENCODER_RECONFIGURE_CONTROL_SERVER_PORT);
+
+	if (bind(sock,
+         (struct sockaddr *) &address,
+         sizeof (address)) != 0) {
+		ga_error("video encoder: The port for the reconfigure control server is already in use!\n");
+	}
+
+	listen(sock, 5);
+
+	return sock;
+}
+
+int accept_socket(int socket){
+	struct sockaddr_in client;
+	unsigned int len;
+
+	len = sizeof(client);
+	int new_socket = accept(socket, (struct sockaddr *)&client, &len);
+
+	ga_error("video encoder: Client connected to reconfigure control server (fd: %d).\n", new_socket); //inet_ntoa(client.sin_addr));
+
+	return new_socket;
+}
+
+void TCP_recv(int sock, char *data, size_t size) {
+    int len;
+    len = recv (sock, data, size, 0);
+    if( len > 0 || len != -1 )
+       data[len] = '\0';
+    else
+       ga_error("video encoder: Error in recv().");
+}
+
+// Returns < 0 if the connection is to be closed.
+int parseReconfigureControlCommand(char* command_string)
+{
+	char delimiter[] = " \r\n";
+	char *ptr;
+	char *strtokptr = NULL;
+	int iid=0; // TODO: We're just covering the single stream use-case here.
+
+	ptr = strtok_r(command_string, delimiter, &strtokptr);
+	if (ptr == NULL)
+	{
+		ga_error("video encoder: Received empty reconfigure control command.");
+		return 1;
+	}
+
+	if (strncmp (ptr, "quit", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0)
+		return -1;
+
+	if (strncmp(ptr, "crf", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0) {
+		ptr = strtok_r(NULL, delimiter, &strtokptr);
+		if (!ptr)
+		{
+			ga_error("video encoder: Received command to set a constant quantization parameter without parameter.");
+			return 1;
+		}
+		int rf = atoi(ptr);
+		if (rf < 1 || rf > 51)
+		{
+			ga_error("video encoder: Set CRF to %d failed: Invalid value.", rf);
+			return 1;
+		}
+
+		pthread_mutex_lock(&vencoder_reconf_mutex[iid]);
+		ga_ioctl_reconfigure_t *reconf = &vencoder_reconf[iid];
+		bzero(reconf, sizeof(ga_ioctl_reconfigure_t));
+		reconf->id = 0;
+		reconf->crf = rf;
+		pthread_mutex_unlock(&vencoder_reconf_mutex[iid]);
+
+		return 0;
+	}
+
+	ga_error("video encoder: Received unknown reconfigure command: '%s'", ptr);
+	return 1;
+}
+
+static void *
+vencoder_reconfigure_control_server_threadproc(void *arg) {
+	vencoder_reconfigure_control_server_started = 1;
+
+	ga_error("video encoder: Live reconfigure server thread entered.\n");
+
+	char *recv_buf = (char*)malloc(VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN);
+	if(!recv_buf) {
+		ga_error("video encoder: Failed to allocate buffer memory for reconfigure control server.\n");
+		return NULL;
+	}
+
+	int sock = open_socket();
+
+	if (sock)
+		ga_error("video encoder: Live reconfigure server now listening on port %d.\n", VENCODER_RECONFIGURE_CONTROL_SERVER_PORT);
+
+	int sock_max = sock; // highest socket descriptor
+	int client_sock[FD_SETSIZE];
+	int client_sock_index_max = -1;
+	for(int i=0; i<FD_SETSIZE; i++)
+		client_sock[i] = -1;
+
+    fd_set rfds, rfds_copy;
+	FD_ZERO(&rfds);
+	FD_SET(sock, &rfds);
+
+	while(sock > 0 && vencoder_reconfigure_control_server_started == 1) {
+
+		struct timeval tv;
+		tv.tv_sec = 1;
+		tv.tv_usec = 0;
+		rfds_copy = rfds;
+		int ready = select(sock_max+1, &rfds_copy, NULL, NULL, &tv);
+
+		if (ready && FD_ISSET(sock, &rfds_copy)) {
+			ga_error("B\n");
+			int new_socket = accept_socket(sock);
+			if (new_socket == -1) {
+				ga_error("video encoder: Failed to accept connection to reconfigure control server.\n");
+				break;
+			}
+
+			int i;
+			for(i=0; i< FD_SETSIZE; i++)
+				if(client_sock[i] < 0) {
+					client_sock[i] = new_socket;
+				break;
+			}
+
+			if( i == FD_SETSIZE ) {
+				ga_error("video encoder: Too many clients connecting to the reconfigure control server.\n");
+				continue;
+			}
+			FD_SET(new_socket, &rfds);
+			if( new_socket > sock_max )
+			sock_max = new_socket;
+			if( i > client_sock_index_max)
+			client_sock_index_max = i;
+			if( --ready <= 0 )
+				continue; //Nein ...
+		}
+
+		for(int i=0; i <= client_sock_index_max; i++) {
+			int csock = -1;
+			if((csock = client_sock[i]) < 0)
+				continue;
+
+			if(FD_ISSET(csock, &rfds_copy)) {
+				TCP_recv(csock, recv_buf, VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1);
+				ga_error("video encoder: Received reconfigure control message: '%s'\n", recv_buf);
+				if (parseReconfigureControlCommand(recv_buf) < 0)
+				{
+					// Close that connection
+					close(csock);
+					FD_CLR(csock, &rfds);
+					client_sock[i] = -1;        //auf -1 setzen
+					ga_error("video encoder: Client disconnected from the reconfigure control server.\n");
+				}
+				if( --ready <= 0 )
+					break; //Nein ...
+			}
+		} // for(;;)
+	}
+
+	ga_error("video encoder: Reconfigure control server shutting down.");
+
+	close(sock);
+	free(recv_buf);
+
+	return NULL;
 }
 
 static void *
