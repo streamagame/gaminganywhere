@@ -393,6 +393,7 @@ int parseReconfigureControlCommand(char* command_string)
 	if (strncmp (ptr, "quit", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0)
 		return -1;
 
+    // CRF: Constant Rate Factor
 	if (strncmp(ptr, "crf", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0) {
 		ptr = strtok_r(NULL, delimiter, &strtokptr);
 		if (!ptr)
@@ -416,6 +417,57 @@ int parseReconfigureControlCommand(char* command_string)
 
 		return 0;
 	}
+    
+    // Constant Bitrate
+    if (strncmp(ptr, "bitrate", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0) {
+        ptr = strtok_r(NULL, delimiter, &strtokptr);
+        if (!ptr)
+        {
+            ga_error("video encoder: Received command to set a constant bitrate without parameter.");
+            return 1;
+        }
+        int bitrate = atoi(ptr);
+        if (bitrate < 1 || bitrate > 100000)
+        {
+            ga_error("video encoder: Set bitrate to %d failed: Invalid value.", bitrate);
+            return 1;
+        }
+        
+        pthread_mutex_lock(&vencoder_reconf_mutex[iid]);
+        ga_ioctl_reconfigure_t *reconf = &vencoder_reconf[iid];
+        bzero(reconf, sizeof(ga_ioctl_reconfigure_t));
+        reconf->id = 0;
+        reconf->bitrateKbps = bitrate;
+        pthread_mutex_unlock(&vencoder_reconf_mutex[iid]);
+        
+        return 0;
+    }
+    
+    // Buffer size
+    if (strncmp(ptr, "bufsize", VENCODER_RECONFIGURE_CONTROL_SERVER_RECV_BUF_LEN-1) == 0) {
+        ptr = strtok_r(NULL, delimiter, &strtokptr);
+        if (!ptr)
+        {
+            ga_error("video encoder: Received command to set buffer size without parameter.");
+            return 1;
+        }
+        int bufsize = atoi(ptr);
+        if (bufsize < 1)
+        {
+            ga_error("video encoder: Set buffer size to %d failed: Invalid value.", bufsize);
+            return 1;
+        }
+        
+        pthread_mutex_lock(&vencoder_reconf_mutex[iid]);
+        ga_ioctl_reconfigure_t *reconf = &vencoder_reconf[iid];
+        bzero(reconf, sizeof(ga_ioctl_reconfigure_t));
+        reconf->id = 0;
+        reconf->bufsize = bufsize;
+        pthread_mutex_unlock(&vencoder_reconf_mutex[iid]);
+        
+        return 0;
+    }
+    
 
 	ga_error("video encoder: Received unknown reconfigure command: '%s'", ptr);
 	return 1;
@@ -457,7 +509,6 @@ vencoder_reconfigure_control_server_threadproc(void *arg) {
 		int ready = select(sock_max+1, &rfds_copy, NULL, NULL, &tv);
 
 		if (ready && FD_ISSET(sock, &rfds_copy)) {
-			ga_error("B\n");
 			int new_socket = accept_socket(sock);
 			if (new_socket == -1) {
 				ga_error("video encoder: Failed to accept connection to reconfigure control server.\n");
